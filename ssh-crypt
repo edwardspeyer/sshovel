@@ -1,0 +1,88 @@
+#!/usr/bin/env ruby
+
+require 'socket'
+require 'timeout'
+
+# https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
+SSH_AGENTC_REQUEST_IDENTITIES = 11
+SSH_AGENT_IDENTITIES_ANSWER = 12
+SSH_AGENTC_SIGN_REQUEST = 13
+SSH_AGENT_SIGN_RESPONSE = 14
+SSH_AGENT_RSA_SHA2_256 = 2
+SSH_AGENT_RSA_SHA2_512 = 4
+
+@path = ENV['SSH_AUTH_SOCK']
+@socket = UNIXSocket.open(@path)
+
+def byte(b)
+  return [b].pack('C')
+end
+
+def long(l)
+  return [l].pack('N')
+end
+
+def string(s)
+  return [s.size, s].pack('NA*')
+end
+
+def send(*vs)
+  body = vs.join
+  @socket.send(long(body.size), 0)
+  @socket.send(body, 0)
+end
+
+def unpack(template, length)
+  data = @socket.read(length)
+  return data.unpack(template).first
+end
+
+def read(type)
+  case type
+  when :byte    then return unpack('C', 1)
+  when :long    then return unpack('N', 4)
+  when :string  then return unpack('A*', read(:long))
+  end
+end
+
+Key = Struct.new(:blob, :comment)
+
+def identities
+  send(byte(SSH_AGENTC_REQUEST_IDENTITIES))
+  len = read(:long)
+  answer = read(:byte)
+  raise if answer != SSH_AGENT_IDENTITIES_ANSWER
+  keys = []
+  num_keys = read(:long)
+  num_keys.times do 
+    blob = read(:string)
+    comment = read(:string)
+    keys << Key.new(blob, comment)
+  end
+  return keys
+end
+
+def sign_one(key, message)
+  send(
+    byte(SSH_AGENTC_SIGN_REQUEST),
+    string(key.blob),
+    string(message),
+    long(SSH_AGENT_RSA_SHA2_256),
+  )
+  len = read(:long)
+  response = read(:byte)
+  raise if response != SSH_AGENT_SIGN_RESPONSE
+  signature = read(:string)
+  return signature
+end
+
+def sign(message)
+  result = {}
+  for key in identities
+    result[key.comment] = sign_one(key, message)
+  end
+  return result
+end
+
+require 'pp'
+pp sign("hello world")
