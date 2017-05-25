@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 
 require 'socket'
-require 'timeout'
 
 # https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
 SSH_AGENTC_REQUEST_IDENTITIES = 11
@@ -11,8 +10,10 @@ SSH_AGENT_SIGN_RESPONSE = 14
 SSH_AGENT_RSA_SHA2_256 = 2
 SSH_AGENT_RSA_SHA2_512 = 4
 
-@path = ENV['SSH_AUTH_SOCK']
-@socket = UNIXSocket.open(@path)
+def log(message)
+  script = File.basename(__FILE__)
+  STDERR.puts "#{script}: #{message}"
+end
 
 def byte(b)
   return [b].pack('C')
@@ -26,61 +27,156 @@ def string(s)
   return [s.size, s].pack('NA*')
 end
 
-def send(*vs)
-  body = vs.join
-  @socket.send(long(body.size), 0)
-  @socket.send(body, 0)
-end
 
-def unpack(template, length)
-  data = @socket.read(length)
-  return data.unpack(template).first
-end
+class SSHIO
+  def initialize(io)
+    @io = io
+  end
 
-def read(type)
-  case type
-  when :byte    then return unpack('C', 1)
-  when :long    then return unpack('N', 4)
-  when :string  then return unpack('A*', read(:long))
+  def send(*vs)
+    body = vs.join
+    @io.write(long(body.size))
+    @io.write(body)
+  end
+
+  def unpack(template, length)
+    data = @io.read(length)
+    return data.unpack(template).first
+  end
+
+  def read(type)
+    case type
+    when :byte    then return unpack('C', 1)
+    when :long    then return unpack('N', 4)
+    when :string  then return unpack('A*', read(:long))
+    end
   end
 end
 
-def identities
-  send(byte(SSH_AGENTC_REQUEST_IDENTITIES))
-  len = read(:long)
-  answer = read(:byte)
-  raise if answer != SSH_AGENT_IDENTITIES_ANSWER
-  keys = []
-  num_keys = read(:long)
-  num_keys.times do 
-    blob = read(:string)
-    comment = read(:string)
-    keys << [blob, comment]
+
+class SSHAgent
+  def initialize
+    path = ENV['SSH_AUTH_SOCK']
+    socket = UNIXSocket.open(path)
+    @agent = SSHIO.new(socket)
   end
-  return keys
-end
 
-def sign_one(key_blob, message, flags=SSH_AGENT_RSA_SHA2_512)
-  send(
-    byte(SSH_AGENTC_SIGN_REQUEST),
-    string(key_blob),
-    string(message),
-    long(flags),
-  )
-  len = read(:long)
-  response = read(:byte)
-  raise if response != SSH_AGENT_SIGN_RESPONSE
-  signature = read(:string)
-  return signature
-end
-
-def sign(message)
-  result = {}
-  identities.each do |key_blob, comment|
-    result[comment] = sign_one(key_blob, message)
+  def identities
+    @agent.send(byte(SSH_AGENTC_REQUEST_IDENTITIES))
+    len = @agent.read(:long)
+    answer = @agent.read(:byte)
+    raise if answer != SSH_AGENT_IDENTITIES_ANSWER
+    key = Struct.new(:blob, :comment)
+    keys = []
+    num_keys = @agent.read(:long)
+    num_keys.times do
+      blob = @agent.read(:string)
+      comment = @agent.read(:string)
+      keys << key.new(blob, comment)
+    end
+    return keys
   end
-  return result
+
+  def sign(key, message, flags=SSH_AGENT_RSA_SHA2_512)
+    @agent.send(
+      byte(SSH_AGENTC_SIGN_REQUEST),
+      string(key.blob),
+      string(message),
+      long(flags),
+    )
+    len = @agent.read(:long)
+    response = @agent.read(:byte)
+    raise if response != SSH_AGENT_SIGN_RESPONSE
+    signature = @agent.read(:string)
+    return signature
+  end
 end
 
-require 'pp'
-pp sign("hello world")
+
+class Scrypt
+  require 'pty'
+  require 'expect'
+
+  def enc(in_file, out_file, passphrase)
+    PTY.spawn('scrypt', 'enc', in_file, out_file) do |rd, wr, pid|
+      rd.expect("Please enter passphrase: ")
+      wr.puts(passphrase)
+      rd.expect("Please confirm passphrase: ")
+      log "scrypting '#{in_file}'..."
+      wr.puts(passphrase)
+      wr.flush
+      wr.close
+      rd.read
+    end
+  end
+
+  def dec(in_file, out_file, passphrase)
+    PTY.spawn('scrypt', 'dec', in_file, out_file) do |rd, wr, pid|
+      rd.expect("passphrase: ")
+      wr.puts(passphrase)
+      wr.flush
+      wr.close
+      rd.read
+    end
+  end
+end
+
+
+class SSHAgentScrypt
+  require 'digest'
+
+  MAGIC = "https://haz.cat/ssh-crypt"
+
+  def enc(in_file, out_file, agent, key)
+    nonce = File.open("/dev/urandom").read(1024)
+    passphrase = sign(nonce, agent, key)
+    tmp_file = tmp_for(out_file)
+    Scrypt.new.enc(in_file, tmp_file, passphrase)
+    File.open(out_file, 'w') do |out_io|
+      out_io.print(string(MAGIC))
+      out_io.print(string(nonce))
+      File.open(tmp_file) do |tmp_io|
+        IO.copy_stream(tmp_io, out_io)
+      end
+    end
+  end
+
+  def dec(in_file, out_file, agent, key)
+    tmp_file = tmp_for(out_file)
+    nonce = nil
+    File.open(in_file) do |in_io|
+      sshio = SSHIO.new(in_io)
+      magic = sshio.read(:string)
+      raise if magic != MAGIC
+      nonce = sshio.read(:string)
+      File.open(tmp_file, 'w') do |tmp_io|
+        IO.copy_stream(in_io, tmp_io)
+      end
+    end
+    passphrase = sign(nonce, agent, key)
+    Scrypt.new.dec(tmp_file, out_file, passphrase)
+  end
+
+  def tmp_for(file)
+    dirname = File.dirname(file)
+    basename = File.basename(file)
+    pid = $$
+    tmp = "%s/.%s.%d.ssh-scrypt" % [dirname, basename, pid]
+    return tmp
+  end
+
+  def sign(nonce, agent, key)
+    signature = agent.sign(key, nonce)
+    passphrase = Digest::SHA1.hexdigest(signature)
+    return passphrase
+  end
+end
+
+agent = SSHAgent.new
+key = agent.identities.first
+
+p `cat in`
+p SSHAgentScrypt.new.enc("in", "out", agent, key)
+p `ls -l out`
+p SSHAgentScrypt.new.dec("out", "in2", agent, key)
+p `cat in2`
