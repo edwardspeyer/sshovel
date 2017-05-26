@@ -23,57 +23,6 @@ def assert_exists(path):
     if os.path.isdir(path):
         raise Exception('exists, but is a directory: {}'.format(path))
 
-class Scrypt():
-    def encrypt(self, in_file, out_file, passphrase):
-        assert_exists(in_file)
-        pid, fd = self.fork('enc', in_file, out_file)
-        self.send_passphrase(fd, passphrase)
-        self.send_passphrase(fd, passphrase)
-        log("encrypting with scrypt...")
-        os.waitpid(pid, 0)
-        log("done!")
-
-    def decrypt(self, in_file, out_file, passphrase):
-        assert_exists(in_file)
-        pid, fd = self.fork('dec', in_file, out_file)
-        self.send_passphrase(fd, passphrase)
-        log("decrypting with scrypt...")
-        os.waitpid(pid, 0)
-        log("done!")
-
-    def fork(self, command, in_file, out_file):
-        pid, fd = pty.fork()
-        if pid == 0:
-            os.execlp('scrypt', 'scrypt', command, in_file, out_file)
-        fcntl.fcntl(fd, fcntl.F_SETFL, os.O_NONBLOCK)
-        return pid, fd
-
-    def send_passphrase(self, fd, passphrase):
-        self.expect(fd, "passphrase: ", 1)
-        os.write(fd, passphrase)
-        os.write(fd, "\n")
-        os.fsync(fd)
-        self.expect(fd, "\r\n", 1)
-
-    def expect(self, fd, phrase, timeout):
-        start_time = time.time()
-        buf = []
-        while 1:
-            try:
-                c = os.read(fd, 1)
-                if c == '':
-                    raise Exception("EOF after reading: " + ''.join(buf))
-                buf.append(c)
-            except OSError:
-                duration = time.time() - start_time
-                if duration > timeout:
-                    msg = "timed out waiting for '{}'".format(phrase)
-                    raise Exception(msg)
-                time.sleep(0.1)
-            if ''.join(buf).endswith(phrase):
-                return
-
-
 class Pack():
     @staticmethod
     def byte(b):
@@ -126,10 +75,9 @@ class SSH():
     AGENT_RSA_SHA2_256 = 2
     AGENT_RSA_SHA2_512 = 4
 
-    def __init__(self):
-        path = os.environ.get('SSH_AUTH_SOCK')
+    def __init__(self, socket_path):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
-        sock.connect(path)
+        sock.connect(socket_path)
         self.pack = Pack(sock.recv, sock.sendall)
 
     def identities(self):
@@ -160,6 +108,57 @@ class SSH():
         assert response == SSH.AGENT_SIGN_RESPONSE
         signature = p.read_string()
         return signature
+
+
+class Scrypt():
+    def encrypt(self, in_file, out_file, passphrase):
+        assert_exists(in_file)
+        pid, fd = self.fork('enc', in_file, out_file)
+        self.send_passphrase(fd, passphrase)
+        self.send_passphrase(fd, passphrase)
+        log("encrypting with scrypt...")
+        os.waitpid(pid, 0)
+        log("done!")
+
+    def decrypt(self, in_file, out_file, passphrase):
+        assert_exists(in_file)
+        pid, fd = self.fork('dec', in_file, out_file)
+        self.send_passphrase(fd, passphrase)
+        log("decrypting with scrypt...")
+        os.waitpid(pid, 0)
+        log("done!")
+
+    def fork(self, command, in_file, out_file):
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execlp('scrypt', 'scrypt', command, in_file, out_file)
+        fcntl.fcntl(fd, fcntl.F_SETFL, os.O_NONBLOCK)
+        return pid, fd
+
+    def send_passphrase(self, fd, passphrase):
+        self.expect(fd, "passphrase: ", 1)
+        os.write(fd, passphrase)
+        os.write(fd, "\n")
+        os.fsync(fd)
+        self.expect(fd, "\r\n", 1)
+
+    def expect(self, fd, phrase, timeout):
+        start_time = time.time()
+        buf = []
+        while 1:
+            try:
+                c = os.read(fd, 1)
+                if c == '':
+                    raise Exception("EOF after reading: " + ''.join(buf))
+                buf.append(c)
+            except OSError:
+                duration = time.time() - start_time
+                if duration > timeout:
+                    msg = "timed out waiting for '{}'".format(phrase)
+                    raise Exception(msg)
+                time.sleep(0.1)
+            if ''.join(buf).endswith(phrase):
+                return
 
 
 class SSHScrypt():
@@ -200,24 +199,91 @@ class SSHScrypt():
         basename = os.path.basename(file)
         return '{}/.{}.ssh-scrypt'.format(dir, basename)
 
-"""
-import StringIO
-s = StringIO.StringIO()
 
-p = Pack(s.read, s.write)
-p.write(p.byte(23), p.string("Hello!"))
-
-s.seek(0)
-
-print(p.read_long())
-print(p.read_byte())
-print(p.read_string())
+def test():
+    TEST_KEY = """
+-----BEGIN RSA PRIVATE KEY-----
+MIICXAIBAAKBgQD0OCPZ50akyXxhyFz/JdCTZISvHJ+nFOnXMHKQzF3Q3fAbXGVM
+jEU2Wer+owj6s4wxuNmd6g3XAyyomCSRoxE6txNpQ10Yay4ZUMhO3XDr3zN5WBhd
+6dqDjNLsrfu5mjy9aWFZDpBYnmRnOQBeLGxNQE6shbwOAzsixirmiUyXBQIDAQAB
+AoGAZwCallgGIpBcZn10Q6S2UMQPdi/TYkveyITFfS7Ezsgccd3JV7y9oEvSYi1v
+JxW9Jmd5WTITPkE3f7ATlF07cT5EZaHPMHm02GJegopN1AW2caoN2N+FHpe2cnOW
+0vLtV+dQ0j5QnCWOfPpM70wYqEwvO+tC9uIaIOCBVTdyF20CQQD7IxTeZjiirZ0M
+SlSPZmNRlFBRUkHjc4I7A5weV5L5YR/LWN2W/RL0j+v60L18Uld0pGcDuYX1Fg42
+oUYEazaLAkEA+PLEMtU7vh3d9PtyDyIG7prcAJnUljwybRgZoVQNMsMxxONbSoAb
+B9tw8irock7zjkPYsqvjSAxcfV1I+J6qrwJBAJaFQEzMF8XpKOfk5SnNxFlw+3LC
+Spt47+VPFJNbCcxOWjAW4zlMFcBfQqDh27BX6fMPVm71E0UCIyK7JqwfVmECQAJ8
+8qcLaIhy5ff/11j9XxJda9t5rh0+Rsa+Wes52tPqDYJJP21UMHD4qX1SHnaeAWMn
+nG/UtfXPYdFC8GrDszMCQHNHjkRPhgnFKZBIqg6CjWE0wVWdZRWwLrP7a2YQsX4A
+aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
+-----END RSA PRIVATE KEY-----
 """
 
-"""
-Scrypt().enc('in', 'out', 'PASSPHRASE')
-Scrypt().dec('out', 'in2', 'PASSPHRASE')
-"""
+    def assert_equal(expected, actual, what):
+        if expected != actual:
+            raise Exception(
+                "{}: expected '{}' but got '{}'"
+                    .format(what, expected, actual))
+
+    # Pack
+    import StringIO
+    message = "Hello, world!"
+    io = StringIO.StringIO()
+    pack = Pack(io.read, io.write)
+    pack.write(pack.byte(99), pack.string(message))
+    io.seek(0)
+    assert_equal(pack.read_long(), 18, "total pack length")
+    assert_equal(pack.read_byte(), 99, "packed byte")
+    assert_equal(pack.read_string(), message, "packed string")
+
+    # SSH
+    import re
+    import signal
+    import subprocess
+    import tempfile
+    # - Start an agent
+    output = subprocess.check_output('ssh-agent')
+    socket_path = re.search('SSH_AUTH_SOCK=(.+?);', output).group(1)
+    agent_pid = int(re.search('SSH_AGENT_PID=(\d+)', output).group(1))
+    # - Make and load keys
+    os.putenv('SSH_AUTH_SOCK', socket_path)
+    key_name = 'a_test_ssh_key'
+    key_file = tempfile.NamedTemporaryFile(prefix=key_name + '.')
+    key_file.write(TEST_KEY)
+    key_file.flush()
+    subprocess.check_output(['ssh-add', key_file.name], stderr=subprocess.PIPE)
+    # - Test SSH
+    ssh = SSH(socket_path)
+    keys = ssh.identities()
+    assert_equal(len(keys), 1, "number of keys loaded in agent")
+    key = keys[0]
+
+    # Scrypt
+    log("testing Scrypt class")
+    plainfile0 = tempfile.NamedTemporaryFile()
+    cipherfile = tempfile.NamedTemporaryFile()
+    plainfile1 = tempfile.NamedTemporaryFile()
+    plainfile0.write(message)
+    plainfile0.flush()
+    c = Scrypt()
+    c.encrypt(plainfile0.name, cipherfile.name, 'PASSPHRASE')
+    c.decrypt(cipherfile.name, plainfile1.name, 'PASSPHRASE')
+    assert_equal(message, plainfile1.read(), "result of encrypt then decrypt")
+
+    # SSHScrypt
+    log("testing SSHScrypt class")
+    plainfile0 = tempfile.NamedTemporaryFile()
+    cipherfile = tempfile.NamedTemporaryFile()
+    plainfile1 = tempfile.NamedTemporaryFile()
+    plainfile0.write(message)
+    plainfile0.flush()
+    c = SSHScrypt()
+    c.encrypt(plainfile0.name, cipherfile.name, ssh, key)
+    c.decrypt(cipherfile.name, plainfile1.name, ssh, key)
+    assert_equal(message, plainfile1.read(), "result of SSHScrypt encrypt and decrypt")
+
+    # ...and tidy up.
+    os.kill(agent_pid, signal.SIGKILL)
 
 def main():
     ssh = SSH()
@@ -225,8 +291,12 @@ def main():
     SSHScrypt().encrypt('in', 'out', ssh, key)
     SSHScrypt().decrypt('out', 'in2', ssh, key)
 
+test()
+
+"""
 try:
     main()
 except Exception as ex:
     log(ex.message)
     sys.exit(1)
+"""
