@@ -346,6 +346,9 @@ def main():
         test()
         sys.exit(0)
 
+    if not(args.encrypt or args.decrypt):
+        parser.error("please select one of --encrypt or --decrypt")
+
     socket_path = os.environ.get('SSH_AUTH_SOCK')
     if socket_path == "":
         parser.error("SSH_AUTH_SOCK is empty or unset")
@@ -372,13 +375,12 @@ def main():
                 "more than one key matched '{}': {}"
                 .format(args.key, [k.comment for k in matches]))
 
-    log("using key '{}'".format(key.comment))
-
     if args.encrypt:
+        log("using key '{}'".format(key.comment))
         in_file, out_file = args.encrypt
         SSHScrypt().encrypt(in_file, out_file, ssh, key)
-
-    if args.decrypt:
+    elif args.decrypt:
+        log("using key '{}'".format(key.comment))
         in_file, out_file = args.decrypt
         SSHScrypt().decrypt(in_file, out_file, ssh, key)
 
