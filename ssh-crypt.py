@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
-import hashlib
 from collections import namedtuple
+import argparse
 import fcntl
+import hashlib
 import os
 import os.path
 import pty
@@ -291,18 +292,67 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
     # ...and tidy up.
     os.kill(agent_pid, signal.SIGKILL)
 
+
 def main():
-    ssh = SSH()
-    key = ssh.identities()[0]
-    SSHScrypt().encrypt('in', 'out', ssh, key)
-    SSHScrypt().decrypt('out', 'in2', ssh, key)
+    parser = argparse.ArgumentParser(description='Encrypt files with ssh keys')
+    parser.add_argument('--encrypt',
+            nargs=2,
+            metavar=('IN', 'OUT'),
+            help='')
+    parser.add_argument('--decrypt',
+            nargs=2,
+            metavar=('IN', 'OUT'),
+            help='')
+    parser.add_argument('--key',
+            metavar='MATCH',
+            help='use the ssh key whose comment matches MATCH')
+    parser.add_argument('--test',
+            action='store_true',
+            help='run the test suite')
+    args = parser.parse_args()
 
-test()
+    if args.test:
+        test()
+        sys.exit(0)
 
-"""
+    socket_path = os.environ.get('SSH_AUTH_SOCK')
+    if socket_path == "":
+        parser.error("SSH_AUTH_SOCK is empty or unset")
+
+    ssh = SSH(socket_path)
+    keys = ssh.identities()
+    if len(keys) == 0:
+        parser.error("ssh agent has no keys")
+
+    key = keys[0]
+    if args.key:
+        matches = []
+        for candidate in keys:
+            if args.key in candidate.comment:
+                matches.append(candidate)
+        if len(matches) == 0:
+            parser.error(
+                    "no ssh key matched '{}'; known keys: {}"
+                    .format(args.key, [k.comment for k in keys]))
+        elif len(matches) == 1:
+            key = matches[0]
+        else:
+            parser.error(
+                    "more than one key matched '{}': {}"
+                    .format(args.key, [k.comment for k in matches]))
+
+    log("using key '{}'".format(key.comment))
+
+    if args.encrypt:
+        in_file, out_file = args.encrypt
+        SSHScrypt().encrypt(in_file, out_file, ssh, key)
+
+    if args.decrypt:
+        in_file, out_file = args.decrypt
+        SSHScrypt().decrypt(in_file, out_file, ssh, key)
+
 try:
     main()
 except SSHCryptException as ex:
     log(ex.message)
     sys.exit(1)
-"""
