@@ -43,7 +43,7 @@ def assert_exists(path):
         raise UserException('exists, but is a directory: {}'.format(path))
 
 
-class Pack(object):
+class Packer(object):
     @staticmethod
     def byte(b):
         return struct.pack('>B', b)
@@ -58,15 +58,23 @@ class Pack(object):
         format = '>L{}s'.format(length)
         return struct.pack(format, length, s)
 
-    def __init__(self, read, write):
-        self._read = read
-        self._write = write
+    @classmethod
+    def for_socket(cls, socket):
+        return cls(socket.recv, socket.sendall)
+
+    @classmethod
+    def for_file(cls, file):
+        return cls(file.read, file.write)
+
+    def __init__(self, read_fn, write_fn):
+        self.read_fn = read_fn
+        self.write_fn = write_fn
 
     def write(self, *values):
         body = ''.join(values)
         length = len(body)
-        self._write(self.long(length))
-        self._write(body)
+        self.write_fn(self.long(length))
+        self.write_fn(body)
 
     def read_byte(self):
         return self.unpack(1, '>B')
@@ -80,7 +88,7 @@ class Pack(object):
         return self.unpack(length, format)
 
     def unpack(self, length, format):
-        bytes = self._read(length)
+        bytes = self.read_fn(length)
         return struct.unpack(format, bytes)[0]
 
 
@@ -98,7 +106,7 @@ class SSH(object):
     def __init__(self, socket_path):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
         sock.connect(socket_path)
-        self.pack = Pack(sock.recv, sock.sendall)
+        self.pack = Packer.for_socket(sock)
 
     def identities(self):
         p = self.pack
@@ -193,8 +201,8 @@ class SSHScrypt(object):
         tmp_file = self.tmp_for(out_file)
         Scrypt().encrypt(in_file, tmp_file, passphrase)
         with open(out_file, 'w') as out_io:
-            out_io.write(Pack.string(SSHScrypt.MAGIC))
-            out_io.write(Pack.string(nonce))
+            out_io.write(Packer.string(SSHScrypt.MAGIC))
+            out_io.write(Packer.string(nonce))
             with open(tmp_file) as tmp_io:
                 shutil.copyfileobj(tmp_io, out_io)
 
@@ -203,7 +211,7 @@ class SSHScrypt(object):
         passphrase = None
         tmp_file = self.tmp_for(out_file)
         with open(in_file) as in_io:
-            p = Pack(in_io.read, in_io.write)
+            p = Packer.for_file(in_io)
             magic = p.read_string()
             nonce = p.read_string()
             signature = ssh.sign(key, nonce)
@@ -246,11 +254,11 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
                 "{}: expected '{}' but got '{}'"
                 .format(what, expected, actual))
 
-    # Pack
+    # Packer
     import StringIO
     message = "Hello, world!"
     io = StringIO.StringIO()
-    pack = Pack(io.read, io.write)
+    pack = Packer.for_file(io)
     pack.write(pack.byte(99), pack.string(message))
     io.seek(0)
     assert_equal(pack.read_long(), 18, "total pack length")
