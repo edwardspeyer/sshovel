@@ -5,6 +5,7 @@ ssh-crypt: encrypt and decrypt files using ssh keys.
 
 from collections import namedtuple
 import argparse
+import atexit
 import fcntl
 import hashlib
 import os
@@ -14,6 +15,7 @@ import shutil
 import socket
 import struct
 import sys
+import tempfile
 import time
 
 
@@ -226,7 +228,10 @@ class SSHScrypt(object):
         if dir == '':
             dir = '.'
         basename = os.path.basename(file)
-        return '{}/.{}.ssh-scrypt'.format(dir, basename)
+        fd, tmp_file = tempfile.mkstemp(prefix='.'+basename, dir=dir)
+        os.close(fd)
+        atexit.register(lambda: os.remove(tmp_file))
+        return tmp_file
 
 
 def test():
