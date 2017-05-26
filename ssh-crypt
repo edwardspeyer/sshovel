@@ -23,6 +23,7 @@ def log(message):
     message = "{}: {}\n".format(script, message)
     sys.stderr.write(message)
 
+
 def assert_exists(path):
     if not os.path.exists(path):
         raise SSHCryptException('file not found: {}'.format(path))
@@ -156,7 +157,8 @@ class Scrypt():
             try:
                 c = os.read(fd, 1)
                 if c == '':
-                    raise SSHCryptException("EOF after reading: " + ''.join(buf))
+                    msg = "EOF after reading: " + ''.join(buf)
+                    raise SSHCryptException(msg)
                 buf.append(c)
             except OSError:
                 duration = time.time() - start_time
@@ -230,7 +232,7 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
         if expected != actual:
             raise SSHCryptException(
                 "{}: expected '{}' but got '{}'"
-                    .format(what, expected, actual))
+                .format(what, expected, actual))
 
     # Pack
     import StringIO
@@ -275,7 +277,7 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
     c = Scrypt()
     c.encrypt(plainfile0.name, cipherfile.name, 'PASSPHRASE')
     c.decrypt(cipherfile.name, plainfile1.name, 'PASSPHRASE')
-    assert_equal(message, plainfile1.read(), "result of encrypt then decrypt")
+    assert_equal(message, plainfile1.read(), "result of decrypt")
 
     # SSHScrypt
     log("testing SSHScrypt class")
@@ -287,7 +289,7 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
     c = SSHScrypt()
     c.encrypt(plainfile0.name, cipherfile.name, ssh, key)
     c.decrypt(cipherfile.name, plainfile1.name, ssh, key)
-    assert_equal(message, plainfile1.read(), "result of SSHScrypt encrypt and decrypt")
+    assert_equal(message, plainfile1.read(), "result of SSHScrypt decrypt")
 
     # ...and tidy up.
     os.kill(agent_pid, signal.SIGKILL)
@@ -295,18 +297,22 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
 
 def main():
     parser = argparse.ArgumentParser(description='Encrypt files with ssh keys')
-    parser.add_argument('--encrypt',
+    parser.add_argument(
+            '--encrypt',
             nargs=2,
             metavar=('IN', 'OUT'),
             help='')
-    parser.add_argument('--decrypt',
+    parser.add_argument(
+            '--decrypt',
             nargs=2,
             metavar=('IN', 'OUT'),
             help='')
-    parser.add_argument('--key',
+    parser.add_argument(
+            '--key',
             metavar='MATCH',
             help='use the ssh key whose comment matches MATCH')
-    parser.add_argument('--test',
+    parser.add_argument(
+            '--test',
             action='store_true',
             help='run the test suite')
     args = parser.parse_args()
