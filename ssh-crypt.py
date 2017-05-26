@@ -12,6 +12,11 @@ import struct
 import sys
 import time
 
+
+class SSHCryptException(Exception):
+    pass
+
+
 def log(message):
     script = os.path.basename(sys.argv[0])
     message = "{}: {}\n".format(script, message)
@@ -19,9 +24,10 @@ def log(message):
 
 def assert_exists(path):
     if not os.path.exists(path):
-        raise Exception('file not found: {}'.format(path))
+        raise SSHCryptException('file not found: {}'.format(path))
     if os.path.isdir(path):
-        raise Exception('exists, but is a directory: {}'.format(path))
+        raise SSHCryptException('exists, but is a directory: {}'.format(path))
+
 
 class Pack():
     @staticmethod
@@ -149,13 +155,13 @@ class Scrypt():
             try:
                 c = os.read(fd, 1)
                 if c == '':
-                    raise Exception("EOF after reading: " + ''.join(buf))
+                    raise SSHCryptException("EOF after reading: " + ''.join(buf))
                 buf.append(c)
             except OSError:
                 duration = time.time() - start_time
                 if duration > timeout:
                     msg = "timed out waiting for '{}'".format(phrase)
-                    raise Exception(msg)
+                    raise SSHCryptException(msg)
                 time.sleep(0.1)
             if ''.join(buf).endswith(phrase):
                 return
@@ -221,7 +227,7 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
 
     def assert_equal(expected, actual, what):
         if expected != actual:
-            raise Exception(
+            raise SSHCryptException(
                 "{}: expected '{}' but got '{}'"
                     .format(what, expected, actual))
 
@@ -296,7 +302,7 @@ test()
 """
 try:
     main()
-except Exception as ex:
+except SSHCryptException as ex:
     log(ex.message)
     sys.exit(1)
 """
