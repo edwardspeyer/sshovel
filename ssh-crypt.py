@@ -20,6 +20,7 @@ def log(message):
 
 class Scrypt():
     def encrypt(self, in_file, out_file, passphrase):
+        Files.assert_exists(in_file)
         pid, fd = self.fork('enc', in_file, out_file)
         self.send_passphrase(fd, passphrase)
         self.send_passphrase(fd, passphrase)
@@ -28,6 +29,7 @@ class Scrypt():
         log("done!")
 
     def decrypt(self, in_file, out_file, passphrase):
+        Files.assert_exists(in_file)
         pid, fd = self.fork('dec', in_file, out_file)
         self.send_passphrase(fd, passphrase)
         log("decrypting with scrypt...")
@@ -68,10 +70,6 @@ class Scrypt():
 
 
 class Pack():
-    def __init__(self, read, write):
-        self._read = read
-        self._write = write
-
     @staticmethod
     def byte(b):
         return struct.pack('>B', b)
@@ -85,6 +83,10 @@ class Pack():
         length = len(s)
         format = '>L{}s'.format(length)
         return struct.pack(format, length, s)
+
+    def __init__(self, read, write):
+        self._read = read
+        self._write = write
 
     def write(self, *values):
         body = ''.join(values)
@@ -155,10 +157,19 @@ class SSH():
         return signature
 
 
+class Files():
+    @staticmethod
+    def assert_exists(path):
+        if not os.path.exists(path):
+            raise Exception('file not found: {}'.format(path))
+        if os.path.isdir(path):
+            raise Exception('exists, but is a directory: {}'.format(path))
+
 class SSHScrypt():
     MAGIC = "https://haz.cat/ssh-crypt"
-    
+
     def encrypt(self, in_file, out_file, ssh, key):
+        Files.assert_exists(in_file)
         nonce = os.urandom(128)
         signature = ssh.sign(key, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
@@ -171,6 +182,7 @@ class SSHScrypt():
                 shutil.copyfileobj(tmp_io, out_io)
 
     def decrypt(self, in_file, out_file, ssh, key):
+        Files.assert_exists(in_file)
         passphrase = None
         tmp_file = self.tmp_for(out_file)
         with open(in_file) as in_io:
@@ -210,7 +222,14 @@ Scrypt().enc('in', 'out', 'PASSPHRASE')
 Scrypt().dec('out', 'in2', 'PASSPHRASE')
 """
 
-ssh = SSH()
-key = ssh.identities()[0]
-SSHScrypt().encrypt('in', 'out', ssh, key)
-SSHScrypt().decrypt('out', 'in2', ssh, key)
+def main():
+    ssh = SSH()
+    key = ssh.identities()[0]
+    SSHScrypt().encrypt('in', 'out', ssh, key)
+    SSHScrypt().decrypt('out', 'in2', ssh, key)
+
+try:
+    main()
+except Exception as ex:
+    log(ex.message)
+    sys.exit(1)
