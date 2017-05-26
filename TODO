@@ -1,0 +1,22 @@
+diff --git a/ssh-crypt b/ssh-crypt
+index 76b754e..d284bea 100755
+--- a/ssh-crypt
++++ b/ssh-crypt
+@@ -1,5 +1,17 @@
+ #!/usr/bin/env ruby
+ 
++=begin
++
++TODO
++  document sources
++    - golang ssh-crypt
++    - scrypt pty thing
++    - RFC
++    - IETF
++  turn classes into modules -- more ruby like namespaces
++
++=end
++
+ require 'socket'
+ 
+ # https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
