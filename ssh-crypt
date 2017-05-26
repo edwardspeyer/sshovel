@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+"""
+ssh-crypt: encrypt and decrypt files using ssh keys.
+"""
 
 from collections import namedtuple
 import argparse
@@ -14,24 +17,33 @@ import sys
 import time
 
 
-class SSHCryptException(Exception):
+class UserException(Exception):
+    """
+    Exception for alerting the user with messages (and not full stack traces.)
+    """
     pass
 
 
 def log(message):
+    """
+    Simple logger for command line output.
+    """
     script = os.path.basename(sys.argv[0])
     message = "{}: {}\n".format(script, message)
     sys.stderr.write(message)
 
 
 def assert_exists(path):
+    """
+    Check file exists and is a file, or alert the user.
+    """
     if not os.path.exists(path):
-        raise SSHCryptException('file not found: {}'.format(path))
+        raise UserException('file not found: {}'.format(path))
     if os.path.isdir(path):
-        raise SSHCryptException('exists, but is a directory: {}'.format(path))
+        raise UserException('exists, but is a directory: {}'.format(path))
 
 
-class Pack():
+class Pack(object):
     @staticmethod
     def byte(b):
         return struct.pack('>B', b)
@@ -72,7 +84,7 @@ class Pack():
         return struct.unpack(format, bytes)[0]
 
 
-class SSH():
+class SSH(object):
     Key = namedtuple('Key', 'blob comment')
 
     # https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
@@ -118,7 +130,7 @@ class SSH():
         return signature
 
 
-class Scrypt():
+class Scrypt(object):
     def encrypt(self, in_file, out_file, passphrase):
         assert_exists(in_file)
         pid, fd = self.fork('enc', in_file, out_file)
@@ -158,19 +170,19 @@ class Scrypt():
                 c = os.read(fd, 1)
                 if c == '':
                     msg = "EOF after reading: " + ''.join(buf)
-                    raise SSHCryptException(msg)
+                    raise UserException(msg)
                 buf.append(c)
             except OSError:
                 duration = time.time() - start_time
                 if duration > timeout:
                     msg = "timed out waiting for '{}'".format(phrase)
-                    raise SSHCryptException(msg)
+                    raise UserException(msg)
                 time.sleep(0.1)
             if ''.join(buf).endswith(phrase):
                 return
 
 
-class SSHScrypt():
+class SSHScrypt(object):
     MAGIC = "https://haz.cat/ssh-crypt"
 
     def encrypt(self, in_file, out_file, ssh, key):
@@ -230,7 +242,7 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
 
     def assert_equal(expected, actual, what):
         if expected != actual:
-            raise SSHCryptException(
+            raise UserException(
                 "{}: expected '{}' but got '{}'"
                 .format(what, expected, actual))
 
@@ -298,23 +310,23 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
 def main():
     parser = argparse.ArgumentParser(description='Encrypt files with ssh keys')
     parser.add_argument(
-            '--encrypt',
-            nargs=2,
-            metavar=('IN', 'OUT'),
-            help='')
+        '--encrypt',
+        nargs=2,
+        metavar=('IN', 'OUT'),
+        help='')
     parser.add_argument(
-            '--decrypt',
-            nargs=2,
-            metavar=('IN', 'OUT'),
-            help='')
+        '--decrypt',
+        nargs=2,
+        metavar=('IN', 'OUT'),
+        help='')
     parser.add_argument(
-            '--key',
-            metavar='MATCH',
-            help='use the ssh key whose comment matches MATCH')
+        '--key',
+        metavar='MATCH',
+        help='use the ssh key whose comment matches MATCH')
     parser.add_argument(
-            '--test',
-            action='store_true',
-            help='run the test suite')
+        '--test',
+        action='store_true',
+        help='run the test suite')
     args = parser.parse_args()
 
     if args.test:
@@ -338,14 +350,14 @@ def main():
                 matches.append(candidate)
         if len(matches) == 0:
             parser.error(
-                    "no ssh key matched '{}'; known keys: {}"
-                    .format(args.key, [k.comment for k in keys]))
+                "no ssh key matched '{}'; known keys: {}"
+                .format(args.key, [k.comment for k in keys]))
         elif len(matches) == 1:
             key = matches[0]
         else:
             parser.error(
-                    "more than one key matched '{}': {}"
-                    .format(args.key, [k.comment for k in matches]))
+                "more than one key matched '{}': {}"
+                .format(args.key, [k.comment for k in matches]))
 
     log("using key '{}'".format(key.comment))
 
@@ -357,8 +369,9 @@ def main():
         in_file, out_file = args.decrypt
         SSHScrypt().decrypt(in_file, out_file, ssh, key)
 
+
 try:
     main()
-except SSHCryptException as ex:
+except UserException as ex:
     log(ex.message)
     sys.exit(1)
