@@ -402,6 +402,7 @@ class SSHEncrypter(object):
     """
 
     MAGIC = "HAZ.CAT/SSH-CRYPT"
+    VERSION = "V1"
 
     def encrypt(self, in_file, out_file, ssh, key, encrypter):
         assert_exists(in_file)
@@ -412,6 +413,7 @@ class SSHEncrypter(object):
         encrypter.encrypt(in_file, tmp_file, passphrase)
         with open(out_file, 'w') as out_io:
             out_io.write(self.MAGIC)
+            out_io.write(Packer.string(self.VERSION))
             out_io.write(Packer.string(encrypter.__class__.__name__))
             out_io.write(Packer.string(nonce))
             with open(tmp_file) as tmp_io:
@@ -429,6 +431,7 @@ class SSHEncrypter(object):
                     "unrecognized format; did not find magic number '{}'"
                     .format(self.MAGIC))
             packer = Packer.for_file(in_io)
+            _ = packer.read_string()  # Version, unused.
             encrypter_name = packer.read_string()
             nonce = packer.read_string()
             signature = ssh.sign(key, nonce)
