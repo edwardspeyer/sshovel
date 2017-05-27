@@ -91,12 +91,8 @@ class Packer(object):
     def read_long(self):
         return self.unpack(4, '>L')
 
-    def read_string(self, max_length=None):
+    def read_string(self):
         length = self.read_long()
-        if max_length is not None and length > max_length:
-            raise UserException(
-                "string length is {}b which is longer than expected (> {}b)"
-                .format(length, max_length))
         template = '{}s'.format(length)
         return self.unpack(length, template)
 
@@ -330,7 +326,7 @@ class SSHScrypt(object):
     passphrase.
     """
 
-    MAGIC = "https://haz.cat/ssh-crypt"
+    MAGIC = "HAZ.CAT/SSH-CRYPT"
 
     def encrypt(self, in_file, out_file, ssh, key):
         assert_exists(in_file)
@@ -340,7 +336,7 @@ class SSHScrypt(object):
         tmp_file = self.tmp_for(out_file)
         Scrypt().encrypt(in_file, tmp_file, passphrase)
         with open(out_file, 'w') as out_io:
-            out_io.write(Packer.string(SSHScrypt.MAGIC))
+            out_io.write(self.MAGIC)
             out_io.write(Packer.string(nonce))
             with open(tmp_file) as tmp_io:
                 shutil.copyfileobj(tmp_io, out_io)
@@ -350,11 +346,12 @@ class SSHScrypt(object):
         passphrase = None
         tmp_file = self.tmp_for(out_file)
         with open(in_file) as in_io:
-            packer = Packer.for_file(in_io)
-            magic = packer.read_string(100)
+            magic = in_io.read(len(self.MAGIC))
             if magic != self.MAGIC:
                 raise UserException(
-                    "input file is not in a recognisable format")
+                    "unrecognized format; did not find magic number '{}'"
+                    .format(self.MAGIC))
+            packer = Packer.for_file(in_io)
             nonce = packer.read_string()
             signature = ssh.sign(key, nonce)
             passphrase = hashlib.sha1(signature).hexdigest()
