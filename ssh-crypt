@@ -32,9 +32,6 @@ class UserException(Exception):
 
 
 def log(message):
-    """
-    Simple logger for command line output.
-    """
     script = os.path.basename(sys.argv[0])
     message = "{}: {}\n".format(script, message)
     sys.stderr.write(message)
@@ -51,27 +48,32 @@ def assert_exists(path):
 
 
 class Packer(object):
-    @staticmethod
-    def byte(b):
-        return struct.pack('>B', b)
+    """
+    Pack and unpack length prefixed binary data, as defined by the SSH
+    standards.
+    """
 
     @staticmethod
-    def long(v):
-        return struct.pack('>L', v)
+    def byte(a_byte):
+        return struct.pack('>B', a_byte)
 
     @staticmethod
-    def string(s):
-        length = len(s)
-        format = '>L{}s'.format(length)
-        return struct.pack(format, length, s)
+    def long(a_long):
+        return struct.pack('>L', a_long)
+
+    @staticmethod
+    def string(a_string):
+        length = len(a_string)
+        template = '>L{}s'.format(length)
+        return struct.pack(template, length, a_string)
 
     @classmethod
-    def for_socket(cls, socket):
-        return cls(socket.recv, socket.sendall)
+    def for_socket(cls, a_socket):
+        return cls(a_socket.recv, a_socket.sendall)
 
     @classmethod
-    def for_file(cls, file):
-        return cls(file.read, file.write)
+    def for_file(cls, a_file):
+        return cls(a_file.read, a_file.write)
 
     def __init__(self, read_fn, write_fn):
         self.read_fn = read_fn
@@ -89,29 +91,37 @@ class Packer(object):
     def read_long(self):
         return self.unpack(4, '>L')
 
-    def read_string(self):
+    def read_string(self, max_length=None):
         length = self.read_long()
-        format = '{}s'.format(length)
-        return self.unpack(length, format)
+        if max_length is not None and length > max_length:
+            raise UserException(
+                "string length is {}b which is longer than expected (> {}b)"
+                .format(length, max_length))
+        template = '{}s'.format(length)
+        return self.unpack(length, template)
 
-    def unpack(self, length, format):
-        bytes = self.read_fn(length)
-        return struct.unpack(format, bytes)[0]
+    def unpack(self, length, template):
+        some_bytes = self.read_fn(length)
+        return struct.unpack(template, some_bytes)[0]
 
 
 class PackerTest(unittest.TestCase):
     def test_read_then_write(self):
         message = "Hello, world!"
-        io = StringIO.StringIO()
-        pack = Packer.for_file(io)
+        sio = StringIO.StringIO()
+        pack = Packer.for_file(sio)
         pack.write(pack.byte(99), pack.string(message))
-        io.seek(0)
+        sio.seek(0)
         self.assertEqual(pack.read_long(), 18, "total pack length")
         self.assertEqual(pack.read_byte(), 99, "packed byte")
         self.assertEqual(pack.read_string(), message, "packed string")
 
 
-class SSH(object):
+class SSHAgentConnection(object):
+    """
+    Interface to a running ssh-agent(1)
+    """
+
     Key = namedtuple('Key', 'blob comment')
 
     # https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
@@ -125,39 +135,43 @@ class SSH(object):
     def __init__(self, socket_path):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
         sock.connect(socket_path)
-        self.pack = Packer.for_socket(sock)
+        self.packer = Packer.for_socket(sock)
 
     def identities(self):
-        p = self.pack
-        p.write(p.byte(SSH.AGENTC_REQUEST_IDENTITIES))
-        length = p.read_long()
-        response = p.read_byte()
-        assert response == SSH.AGENT_IDENTITIES_ANSWER
-        num_keys = p.read_long()
+        self.packer.write(
+            self.packer.byte(SSHAgentConnection.AGENTC_REQUEST_IDENTITIES))
+        _ = self.packer.read_long()  # length
+        response = self.packer.read_byte()
+        assert response == SSHAgentConnection.AGENT_IDENTITIES_ANSWER
+        num_keys = self.packer.read_long()
         result = []
         for _ in range(num_keys):
-            blob = p.read_string()
-            comment = p.read_string()
-            key = SSH.Key(blob, comment)
+            blob = self.packer.read_string()
+            comment = self.packer.read_string()
+            key = SSHAgentConnection.Key(blob, comment)
             result.append(key)
         return result
 
     def sign(self, key, message, flags=0):
-        p = self.pack
-        p.write(
-            p.byte(SSH.AGENTC_SIGN_REQUEST),
-            p.string(key.blob),
-            p.string(message),
-            p.long(flags)
+        self.packer.write(
+            self.packer.byte(SSHAgentConnection.AGENTC_SIGN_REQUEST),
+            self.packer.string(key.blob),
+            self.packer.string(message),
+            self.packer.long(flags)
         )
-        len = p.read_long()
-        response = p.read_byte()
-        assert response == SSH.AGENT_SIGN_RESPONSE
-        signature = p.read_string()
+        _ = self.packer.read_long()  # length
+        response = self.packer.read_byte()
+        assert response == SSHAgentConnection.AGENT_SIGN_RESPONSE
+        signature = self.packer.read_string()
         return signature
 
 
 class SSHTestFixture(object):
+    """
+    Set up a real ssh-agent(1) and load it with a test key, and provide a way
+    to kill the agent.
+    """
+
     TEST_KEY = """
 -----BEGIN RSA PRIVATE KEY-----
 MIICXAIBAAKBgQD0OCPZ50akyXxhyFz/JdCTZISvHJ+nFOnXMHKQzF3Q3fAbXGVM
@@ -176,15 +190,15 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
 -----END RSA PRIVATE KEY-----
 """
 
-    def start(self):
+    def __init__(self):
         self.start_agent()
         self.load_keys()
-        return self
 
     def start_agent(self):
         output = subprocess.check_output('ssh-agent')
         self.socket_path = re.search('SSH_AUTH_SOCK=(.+?);', output).group(1)
-        self.agent_pid = int(re.search('SSH_AGENT_PID=(\d+)', output).group(1))
+        pid_str = re.search(r'SSH_AGENT_PID=(\d+)', output).group(1)
+        self.agent_pid = int(pid_str)
 
     def load_keys(self):
         key_name = 'a_test_ssh_key'
@@ -202,17 +216,17 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
         os.kill(self.agent_pid, signal.SIGKILL)
 
 
-class SSHTest(unittest.TestCase):
+class SSHAgentConnectionTest(unittest.TestCase):
     def setUp(self):
-        self.ssh_fixture = SSHTestFixture().start()
+        self.ssh_fixture = SSHTestFixture()
 
     def test_identities(self):
-        ssh = SSH(self.ssh_fixture.socket_path)
+        ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         keys = ssh.identities()
         self.assertEqual(len(keys), 1, "number of keys loaded in agent")
 
     def test_sign(self):
-        ssh = SSH(self.ssh_fixture.socket_path)
+        ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
         message = "Hello, world!"
         expected_digest = "791c659db0f314126ff0226beaa25aa6b8c4f00e"
@@ -226,6 +240,10 @@ class SSHTest(unittest.TestCase):
 
 
 class Scrypt(object):
+    """
+    Interface to the scrypt(1) command line tool.
+    """
+
     def encrypt(self, in_file, out_file, passphrase):
         assert_exists(in_file)
         pid, fd = self.fork('enc', in_file, out_file)
@@ -243,7 +261,8 @@ class Scrypt(object):
         os.waitpid(pid, 0)
         log("done!")
 
-    def fork(self, command, in_file, out_file):
+    @staticmethod
+    def fork(command, in_file, out_file):
         pid, fd = pty.fork()
         if pid == 0:
             os.execlp('scrypt', 'scrypt', command, in_file, out_file)
@@ -257,16 +276,17 @@ class Scrypt(object):
         os.fsync(fd)
         self.expect(fd, "\r\n", 1)
 
-    def expect(self, fd, phrase, timeout):
+    @staticmethod
+    def expect(fd, phrase, timeout):
         start_time = time.time()
         buf = []
         while 1:
             try:
-                c = os.read(fd, 1)
-                if c == '':
+                byte = os.read(fd, 1)
+                if byte == '':
                     msg = "EOF after reading: " + ''.join(buf)
                     raise UserException(msg)
-                buf.append(c)
+                buf.append(byte)
             except OSError:
                 duration = time.time() - start_time
                 if duration > timeout:
@@ -278,6 +298,11 @@ class Scrypt(object):
 
 
 class TestFiles(object):
+    """
+    Some test files, the first of which contains a known message.  Useful when
+    testing encrypt(f1, f2) and decrypt(f2, f3).
+    """
+
     def __init__(self, message):
         self.f0 = tempfile.NamedTemporaryFile()
         self.f1 = tempfile.NamedTemporaryFile()
@@ -293,13 +318,18 @@ class ScryptTest(unittest.TestCase):
         self.files = TestFiles(self.message)
 
     def test_encrypt_then_decrypt(self):
-        c = Scrypt()
-        c.encrypt(self.files.f0.name, self.files.f1.name, 'PASSPHRASE')
-        c.decrypt(self.files.f1.name, self.files.f2.name, 'PASSPHRASE')
-        self.assertEqual(self.message, self.files.f2.read(), "result of decrypt")
+        scrypt = Scrypt()
+        scrypt.encrypt(self.files.f0.name, self.files.f1.name, 'PASSPHRASE')
+        scrypt.decrypt(self.files.f1.name, self.files.f2.name, 'PASSPHRASE')
+        self.assertEqual(self.message, self.files.f2.read())
 
 
 class SSHScrypt(object):
+    """
+    Interface to scrypt(1) that uses an ssh-agent(1) to generate the scrypt
+    passphrase.
+    """
+
     MAGIC = "https://haz.cat/ssh-crypt"
 
     def encrypt(self, in_file, out_file, ssh, key):
@@ -320,11 +350,12 @@ class SSHScrypt(object):
         passphrase = None
         tmp_file = self.tmp_for(out_file)
         with open(in_file) as in_io:
-            p = Packer.for_file(in_io)
-            magic = p.read_string()
-            nonce = p.read_string()
+            packer = Packer.for_file(in_io)
+            magic = packer.read_string(100)
             if magic != self.MAGIC:
-                raise UserException("input file is not in a recognisable format")
+                raise UserException(
+                    "input file is not in a recognisable format")
+            nonce = packer.read_string()
             signature = ssh.sign(key, nonce)
             passphrase = hashlib.sha1(signature).hexdigest()
             with open(tmp_file, 'w') as tmp_io:
@@ -332,20 +363,20 @@ class SSHScrypt(object):
         Scrypt().decrypt(tmp_file, out_file, passphrase)
 
     @staticmethod
-    def checksum(file):
+    def checksum(path):
         sha = hashlib.sha1()
-        with open(file, 'rb') as f:
+        with open(path, 'rb') as f:
             for block in iter(lambda: f.read(4096), b""):
                 sha.update(block)
         return sha.hexdigest()
 
     @staticmethod
-    def tmp_for(file):
-        dir = os.path.dirname(file)
-        if dir == '':
-            dir = '.'
-        basename = os.path.basename(file)
-        fd, tmp_file = tempfile.mkstemp(prefix='.'+basename, dir=dir)
+    def tmp_for(path):
+        dirname = os.path.dirname(path)
+        if dirname == '':
+            dirname = '.'
+        basename = os.path.basename(path)
+        fd, tmp_file = tempfile.mkstemp(prefix='.'+basename, dir=dirname)
         os.close(fd)
         atexit.register(lambda: os.remove(tmp_file))
         return tmp_file
@@ -355,15 +386,15 @@ class SSHScryptTest(unittest.TestCase):
     message = "Hello, secret world!"
 
     def setUp(self):
-        self.ssh_fixture = SSHTestFixture().start()
+        self.ssh_fixture = SSHTestFixture()
         self.files = TestFiles(self.message)
 
     def test_encrypt_then_decrypt(self):
-        ssh = SSH(self.ssh_fixture.socket_path)
+        ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
-        c = SSHScrypt()
-        c.encrypt(self.files.f0.name, self.files.f1.name, ssh, key)
-        c.decrypt(self.files.f1.name, self.files.f2.name, ssh, key)
+        scrypt = SSHScrypt()
+        scrypt.encrypt(self.files.f0.name, self.files.f1.name, ssh, key)
+        scrypt.decrypt(self.files.f1.name, self.files.f2.name, ssh, key)
         self.assertEqual(self.message, self.files.f2.read())
 
     def tearDown(self):
@@ -405,9 +436,9 @@ def main(args):
     if socket_path == "":
         parser.error("SSH_AUTH_SOCK is empty or unset")
 
-    ssh = SSH(socket_path)
+    ssh = SSHAgentConnection(socket_path)
     keys = ssh.identities()
-    if len(keys) == 0:
+    if not keys:
         parser.error("ssh agent has no keys")
 
     key = keys[0]
@@ -416,7 +447,7 @@ def main(args):
         for candidate in keys:
             if args.key in candidate.comment:
                 matches.append(candidate)
-        if len(matches) == 0:
+        if not matches:
             parser.error(
                 "no ssh key matched '{}'; known keys: {}"
                 .format(args.key, [k.comment for k in keys]))
@@ -442,7 +473,7 @@ class MainTest(unittest.TestCase):
 
     def setUp(self):
         self.files = TestFiles(self.message)
-        self.ssh_fixture = SSHTestFixture().start()
+        self.ssh_fixture = SSHTestFixture()
         os.environ['SSH_AUTH_SOCK'] = self.ssh_fixture.socket_path
 
     def test_encrypt(self):
