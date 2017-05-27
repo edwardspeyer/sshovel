@@ -235,45 +235,88 @@ class SSHAgentConnectionTest(unittest.TestCase):
         self.ssh_fixture.stop()
 
 
-class Scrypt(object):
+class Encrypter(object):
+    def encrypt(self, in_file, out_file, passphrase):
+        pass
+
+    def decrypt(self, in_file, out_file, passphrase):
+        pass
+
+
+class Rot13(Encrypter):
+    def encrypt(self, in_file, out_file, passphrase):
+        digest = hashlib.sha1(passphrase).hexdigest()
+        tmp = tempfile.NamedTemporaryFile()
+        self._rot13(in_file, tmp.name)
+        with open(out_file, 'w') as f:
+            f.write(digest)
+            shutil.copyfileobj(tmp, f)
+
+    def decrypt(self, in_file, out_file, passphrase):
+        digest = hashlib.sha1(passphrase).hexdigest()
+        tmp = tempfile.NamedTemporaryFile()
+        with open(in_file) as f:
+            _ = f.read(len(digest))  # Read the digest
+            shutil.copyfileobj(f, tmp)
+        tmp.flush()
+        return self._rot13(tmp.name, out_file)
+
+    @staticmethod
+    def _rot13(in_file, out_file):
+        script = 'tr a-zA-Z n-za-mA-ZA-M <{} >{}'.format(in_file, out_file)
+        subprocess.check_call(script, shell=True)
+
+
+class Rot13Test(unittest.TestCase):
+    def test_encrypt_then_decrypt(self):
+        message = 'Hello, world!'
+        passphrase = 'PASSPHRASE'
+        files = TestFiles(message)
+        crypter = Rot13()
+        crypter.encrypt(files.f0.name, files.f1.name, passphrase)
+        crypter.decrypt(files.f1.name, files.f2.name, passphrase)
+        self.assertEqual(message, files.f2.read())
+
+
+class Scrypt(Encrypter):
     """
     Interface to the scrypt(1) command line tool.
     """
 
     def encrypt(self, in_file, out_file, passphrase):
         assert_exists(in_file)
-        pid, fd = self.fork('enc', in_file, out_file)
-        self.send_passphrase(fd, passphrase)
-        self.send_passphrase(fd, passphrase)
+        pid, fd = self._fork('enc', in_file, out_file)
+        self._send_passphrase(fd, passphrase)
+        self._send_passphrase(fd, passphrase)
         log("encrypting with scrypt...")
         os.waitpid(pid, 0)
         log("done!")
 
     def decrypt(self, in_file, out_file, passphrase):
         assert_exists(in_file)
-        pid, fd = self.fork('dec', in_file, out_file)
-        self.send_passphrase(fd, passphrase)
+        pid, fd = self._fork('dec', in_file, out_file)
+        self._send_passphrase(fd, passphrase)
         log("decrypting with scrypt...")
         os.waitpid(pid, 0)
         log("done!")
 
     @staticmethod
-    def fork(command, in_file, out_file):
+    def _fork(command, in_file, out_file):
         pid, fd = pty.fork()
         if pid == 0:
             os.execlp('scrypt', 'scrypt', command, in_file, out_file)
         fcntl.fcntl(fd, fcntl.F_SETFL, os.O_NONBLOCK)
         return pid, fd
 
-    def send_passphrase(self, fd, passphrase):
-        self.expect(fd, "passphrase: ", 1)
+    def _send_passphrase(self, fd, passphrase):
+        self._expect(fd, "passphrase: ", 1)
         os.write(fd, passphrase)
         os.write(fd, "\n")
         os.fsync(fd)
-        self.expect(fd, "\r\n", 1)
+        self._expect(fd, "\r\n", 1)
 
     @staticmethod
-    def expect(fd, phrase, timeout):
+    def _expect(fd, phrase, timeout):
         start_time = time.time()
         buf = []
         while 1:
@@ -308,19 +351,17 @@ class TestFiles(object):
 
 
 class ScryptTest(unittest.TestCase):
-    message = "Hello, world!"
-
-    def setUp(self):
-        self.files = TestFiles(self.message)
-
     def test_encrypt_then_decrypt(self):
+        message = "Hello, world!"
+        passphrase = 'PASSPHRASE'
+        files = TestFiles(message)
         scrypt = Scrypt()
-        scrypt.encrypt(self.files.f0.name, self.files.f1.name, 'PASSPHRASE')
-        scrypt.decrypt(self.files.f1.name, self.files.f2.name, 'PASSPHRASE')
-        self.assertEqual(self.message, self.files.f2.read())
+        scrypt.encrypt(files.f0.name, files.f1.name, passphrase)
+        scrypt.decrypt(files.f1.name, files.f2.name, passphrase)
+        self.assertEqual(message, files.f2.read())
 
 
-class SSHScrypt(object):
+class SSHEncrypter(object):
     """
     Interface to scrypt(1) that uses an ssh-agent(1) to generate the scrypt
     passphrase.
@@ -328,23 +369,27 @@ class SSHScrypt(object):
 
     MAGIC = "HAZ.CAT/SSH-CRYPT"
 
-    def encrypt(self, in_file, out_file, ssh, key):
+    def __init__(self, crypter, ssh, key):
+        self.crypter = crypter
+        self.ssh = ssh
+        self.key = key
+
+    def encrypt(self, in_file, out_file, passphrase=''):
         assert_exists(in_file)
-        nonce = SSHScrypt.checksum(in_file)
-        signature = ssh.sign(key, nonce)
-        passphrase = hashlib.sha1(signature).hexdigest()
+        nonce = SSHEncrypter.checksum(in_file)
+        complete_passphrase = self.sign(nonce, passphrase)
         tmp_file = self.tmp_for(out_file)
-        Scrypt().encrypt(in_file, tmp_file, passphrase)
+        self.crypter.encrypt(in_file, tmp_file, complete_passphrase)
         with open(out_file, 'w') as out_io:
             out_io.write(self.MAGIC)
             out_io.write(Packer.string(nonce))
             with open(tmp_file) as tmp_io:
                 shutil.copyfileobj(tmp_io, out_io)
 
-    def decrypt(self, in_file, out_file, ssh, key):
+    def decrypt(self, in_file, out_file, passphrase=''):
         assert_exists(in_file)
-        passphrase = None
         tmp_file = self.tmp_for(out_file)
+        complete_passphrase = None
         with open(in_file) as in_io:
             magic = in_io.read(len(self.MAGIC))
             if magic != self.MAGIC:
@@ -353,11 +398,17 @@ class SSHScrypt(object):
                     .format(self.MAGIC))
             packer = Packer.for_file(in_io)
             nonce = packer.read_string()
-            signature = ssh.sign(key, nonce)
-            passphrase = hashlib.sha1(signature).hexdigest()
+            complete_passphrase = self.sign(nonce, passphrase)
             with open(tmp_file, 'w') as tmp_io:
                 shutil.copyfileobj(in_io, tmp_io)
-        Scrypt().decrypt(tmp_file, out_file, passphrase)
+        self.crypter.decrypt(tmp_file, out_file, complete_passphrase)
+
+    def sign(self, nonce, passphrase):
+        h = hashlib.sha1()
+        h.update(passphrase)
+        signature = self.ssh.sign(self.key, nonce)
+        h.update(signature)
+        return h.hexdigest()
 
     @staticmethod
     def checksum(path):
@@ -379,27 +430,33 @@ class SSHScrypt(object):
         return tmp_file
 
 
-class SSHScryptTest(unittest.TestCase):
-    message = "Hello, secret world!"
-
+class SSHEncrypterTest(unittest.TestCase):
     def setUp(self):
         self.ssh_fixture = SSHTestFixture()
-        self.files = TestFiles(self.message)
 
     def test_encrypt_then_decrypt(self):
+        message = "Hello, secret world!"
+        files = TestFiles(message)
         ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
-        scrypt = SSHScrypt()
-        scrypt.encrypt(self.files.f0.name, self.files.f1.name, ssh, key)
-        scrypt.decrypt(self.files.f1.name, self.files.f2.name, ssh, key)
-        self.assertEqual(self.message, self.files.f2.read())
+        rot13 = Rot13()
+        crypter = SSHEncrypter(rot13, ssh, key)
+        crypter.encrypt(files.f0.name, files.f1.name)
+        crypter.decrypt(files.f1.name, files.f2.name)
+        self.assertEqual(message, files.f2.read())
 
     def tearDown(self):
         self.ssh_fixture.stop()
 
 
 def main(args):
-    parser = argparse.ArgumentParser(description='Encrypt files with ssh keys')
+    crypters = {}
+    for cls in Encrypter.__subclasses__():
+        name = str(cls.__name__).lower()
+        crypters[name] = cls
+
+    parser = argparse.ArgumentParser(
+        description='Encrypt files with passphrases derived from ssh keys.')
     parser.add_argument(
         '--encrypt',
         nargs=2,
@@ -415,6 +472,10 @@ def main(args):
         metavar='MATCH',
         help='use the ssh key whose comment matches MATCH')
     parser.add_argument(
+        '--crypter',
+        choices=crypters.keys(),
+        help='encrypt with the given tool, (default: scrypt)')
+    parser.add_argument(
         '--test',
         nargs='*',
         metavar='ARGS',
@@ -428,6 +489,13 @@ def main(args):
 
     if not(args.encrypt or args.decrypt):
         parser.error("please select one of --encrypt or --decrypt")
+
+    crypter = Scrypt()
+    if args.crypter:
+        cls = crypters[args.crypter]
+        if cls is None:
+            parser.error("unknown crypter: {}".format(args.crypter))
+        crypter = cls()
 
     socket_path = os.environ.get('SSH_AUTH_SOCK')
     if socket_path == "":
@@ -455,14 +523,16 @@ def main(args):
                 "more than one key matched '{}': {}"
                 .format(args.key, [k.comment for k in matches]))
 
+    log("using ssh-agent key: {}".format(key.comment))
+
+    ssh_crypter = SSHEncrypter(crypter, ssh, key)
+
     if args.encrypt:
-        log("using key '{}'".format(key.comment))
         in_file, out_file = args.encrypt
-        SSHScrypt().encrypt(in_file, out_file, ssh, key)
+        ssh_crypter.encrypt(in_file, out_file)
     elif args.decrypt:
-        log("using key '{}'".format(key.comment))
         in_file, out_file = args.decrypt
-        SSHScrypt().decrypt(in_file, out_file, ssh, key)
+        ssh_crypter.decrypt(in_file, out_file)
 
 
 class MainTest(unittest.TestCase):
