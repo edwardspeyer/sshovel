@@ -1,0 +1,11 @@
+#!/bin/sh
+
+pep8 ssh-crypt
+
+pylint -f parseable ssh-crypt \
+  | egrep -v missing-docstring                          \
+  | egrep -v 'Invalid module name "ssh-crypt"'          \
+  | egrep -v 'Invalid (variable|argument) name "fd"'    \
+  | egrep -v 'Invalid attribute name "f[012]"'          \
+  | egrep -v 'TestFiles\] Too few public methods'       \
+  | egrep -v 'SSHScrypt.checksum] Invalid variable name "f"'
