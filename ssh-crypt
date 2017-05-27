@@ -278,6 +278,27 @@ class Rot13Test(unittest.TestCase):
         self.assertEqual(message, files.f2.read())
 
 
+class OpenSSL(Encrypter):
+    def encrypt(self, in_file, out_file, passphrase):
+        self._openssl('enc', in_file, out_file, passphrase)
+
+    def decrypt(self, in_file, out_file, passphrase):
+        self._openssl('dec', in_file, out_file, passphrase)
+
+    @staticmethod
+    def _openssl(command, in_file, out_file, passphrase):
+        tmp = tempfile.NamedTemporaryFile()
+        tmp.write(passphrase)
+        tmp.flush()
+        command = [
+            'openssl', command,
+            '-aes-256-cbc', '-a', '-salt',
+            '-kfile', tmp.name,
+            '-in', in_file,
+            '-out', out_file]
+        subprocess.check_call(command)
+
+
 class Scrypt(Encrypter):
     """
     Interface to the scrypt(1) command line tool.
