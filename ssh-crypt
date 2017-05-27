@@ -390,8 +390,8 @@ class SSHEncrypter(object):
 
     MAGIC = "HAZ.CAT/SSH-CRYPT"
 
-    def __init__(self, crypter, ssh, key):
-        self.crypter = crypter
+    def __init__(self, encrypter, ssh, key):
+        self.encrypter = encrypter
         self.ssh = ssh
         self.key = key
 
@@ -400,7 +400,7 @@ class SSHEncrypter(object):
         nonce = SSHEncrypter.checksum(in_file)
         complete_passphrase = self.sign(nonce, passphrase)
         tmp_file = self.tmp_for(out_file)
-        self.crypter.encrypt(in_file, tmp_file, complete_passphrase)
+        self.encrypter.encrypt(in_file, tmp_file, complete_passphrase)
         with open(out_file, 'w') as out_io:
             out_io.write(self.MAGIC)
             out_io.write(Packer.string(nonce))
@@ -422,7 +422,7 @@ class SSHEncrypter(object):
             complete_passphrase = self.sign(nonce, passphrase)
             with open(tmp_file, 'w') as tmp_io:
                 shutil.copyfileobj(in_io, tmp_io)
-        self.crypter.decrypt(tmp_file, out_file, complete_passphrase)
+        self.encrypter.decrypt(tmp_file, out_file, complete_passphrase)
 
     def sign(self, nonce, passphrase):
         h = hashlib.sha1()
@@ -461,9 +461,9 @@ class SSHEncrypterTest(unittest.TestCase):
         ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
         rot13 = Rot13()
-        crypter = SSHEncrypter(rot13, ssh, key)
-        crypter.encrypt(files.f0.name, files.f1.name)
-        crypter.decrypt(files.f1.name, files.f2.name)
+        encrypter = SSHEncrypter(rot13, ssh, key)
+        encrypter.encrypt(files.f0.name, files.f1.name)
+        encrypter.decrypt(files.f1.name, files.f2.name)
         self.assertEqual(message, files.f2.read())
 
     def tearDown(self):
@@ -471,10 +471,10 @@ class SSHEncrypterTest(unittest.TestCase):
 
 
 def main(args):
-    crypters = {}
+    encrypters = {}
     for cls in Encrypter.__subclasses__():
         name = str(cls.__name__).lower()
-        crypters[name] = cls
+        encrypters[name] = cls
 
     parser = argparse.ArgumentParser(
         description='Encrypt files with passphrases derived from ssh keys.')
@@ -493,8 +493,8 @@ def main(args):
         metavar='MATCH',
         help='use the ssh key whose comment matches MATCH')
     parser.add_argument(
-        '--crypter',
-        choices=crypters.keys(),
+        '--encrypter',
+        choices=encrypters.keys(),
         help='encrypt with the given tool, (default: scrypt)')
     parser.add_argument(
         '--test',
@@ -511,12 +511,12 @@ def main(args):
     if not(args.encrypt or args.decrypt):
         parser.error("please select one of --encrypt or --decrypt")
 
-    crypter = Scrypt()
-    if args.crypter:
-        cls = crypters[args.crypter]
+    encrypter = Scrypt()
+    if args.encrypter:
+        cls = encrypters[args.encrypter]
         if cls is None:
-            parser.error("unknown crypter: {}".format(args.crypter))
-        crypter = cls()
+            parser.error("unknown encrypter: {}".format(args.encrypter))
+        encrypter = cls()
 
     socket_path = os.environ.get('SSH_AUTH_SOCK')
     if socket_path == "":
@@ -546,14 +546,14 @@ def main(args):
 
     log("using ssh-agent key: {}".format(key.comment))
 
-    ssh_crypter = SSHEncrypter(crypter, ssh, key)
+    ssh_encrypter = SSHEncrypter(encrypter, ssh, key)
 
     if args.encrypt:
         in_file, out_file = args.encrypt
-        ssh_crypter.encrypt(in_file, out_file)
+        ssh_encrypter.encrypt(in_file, out_file)
     elif args.decrypt:
         in_file, out_file = args.decrypt
-        ssh_crypter.decrypt(in_file, out_file)
+        ssh_encrypter.decrypt(in_file, out_file)
 
 
 class MainTest(unittest.TestCase):
