@@ -292,29 +292,29 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
     assert_equal(len(keys), 1, "number of keys loaded in agent")
     key = keys[0]
 
+    def create_test_files():
+        file0 = tempfile.NamedTemporaryFile()
+        file1 = tempfile.NamedTemporaryFile()
+        file2 = tempfile.NamedTemporaryFile()
+        file0.write(message)
+        file0.flush()
+        return (file0, file1, file2)
+
     # Scrypt
     log("testing Scrypt class")
-    plainfile0 = tempfile.NamedTemporaryFile()
-    cipherfile = tempfile.NamedTemporaryFile()
-    plainfile1 = tempfile.NamedTemporaryFile()
-    plainfile0.write(message)
-    plainfile0.flush()
+    file0, file1, file2 = create_test_files()
     c = Scrypt()
-    c.encrypt(plainfile0.name, cipherfile.name, 'PASSPHRASE')
-    c.decrypt(cipherfile.name, plainfile1.name, 'PASSPHRASE')
-    assert_equal(message, plainfile1.read(), "result of decrypt")
+    c.encrypt(file0.name, file1.name, 'PASSPHRASE')
+    c.decrypt(file1.name, file2.name, 'PASSPHRASE')
+    assert_equal(message, file2.read(), "result of decrypt")
 
     # SSHScrypt
     log("testing SSHScrypt class")
-    plainfile0 = tempfile.NamedTemporaryFile()
-    cipherfile = tempfile.NamedTemporaryFile()
-    plainfile1 = tempfile.NamedTemporaryFile()
-    plainfile0.write(message)
-    plainfile0.flush()
+    file0, file1, file2 = create_test_files()
     c = SSHScrypt()
-    c.encrypt(plainfile0.name, cipherfile.name, ssh, key)
-    c.decrypt(cipherfile.name, plainfile1.name, ssh, key)
-    assert_equal(message, plainfile1.read(), "result of SSHScrypt decrypt")
+    c.encrypt(file0.name, file1.name, ssh, key)
+    c.decrypt(file1.name, file2.name, ssh, key)
+    assert_equal(message, file2.read(), "result of SSHScrypt decrypt")
 
     # ...and tidy up.
     os.kill(agent_pid, signal.SIGKILL)
