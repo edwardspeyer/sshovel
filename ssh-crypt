@@ -4,6 +4,7 @@ ssh-crypt: encrypt and decrypt files using ssh keys.
 """
 
 from collections import namedtuple
+import StringIO
 import argparse
 import atexit
 import fcntl
@@ -11,12 +12,16 @@ import hashlib
 import os
 import os.path
 import pty
+import re
 import shutil
+import signal
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import time
+import unittest
 
 
 class UserException(Exception):
@@ -94,6 +99,18 @@ class Packer(object):
         return struct.unpack(format, bytes)[0]
 
 
+class PackerTest(unittest.TestCase):
+    def test_read_then_write(self):
+        message = "Hello, world!"
+        io = StringIO.StringIO()
+        pack = Packer.for_file(io)
+        pack.write(pack.byte(99), pack.string(message))
+        io.seek(0)
+        self.assertEqual(pack.read_long(), 18, "total pack length")
+        self.assertEqual(pack.read_byte(), 99, "packed byte")
+        self.assertEqual(pack.read_string(), message, "packed string")
+
+
 class SSH(object):
     Key = namedtuple('Key', 'blob comment')
 
@@ -138,6 +155,74 @@ class SSH(object):
         assert response == SSH.AGENT_SIGN_RESPONSE
         signature = p.read_string()
         return signature
+
+
+class SSHTestFixture(object):
+    TEST_KEY = """
+-----BEGIN RSA PRIVATE KEY-----
+MIICXAIBAAKBgQD0OCPZ50akyXxhyFz/JdCTZISvHJ+nFOnXMHKQzF3Q3fAbXGVM
+jEU2Wer+owj6s4wxuNmd6g3XAyyomCSRoxE6txNpQ10Yay4ZUMhO3XDr3zN5WBhd
+6dqDjNLsrfu5mjy9aWFZDpBYnmRnOQBeLGxNQE6shbwOAzsixirmiUyXBQIDAQAB
+AoGAZwCallgGIpBcZn10Q6S2UMQPdi/TYkveyITFfS7Ezsgccd3JV7y9oEvSYi1v
+JxW9Jmd5WTITPkE3f7ATlF07cT5EZaHPMHm02GJegopN1AW2caoN2N+FHpe2cnOW
+0vLtV+dQ0j5QnCWOfPpM70wYqEwvO+tC9uIaIOCBVTdyF20CQQD7IxTeZjiirZ0M
+SlSPZmNRlFBRUkHjc4I7A5weV5L5YR/LWN2W/RL0j+v60L18Uld0pGcDuYX1Fg42
+oUYEazaLAkEA+PLEMtU7vh3d9PtyDyIG7prcAJnUljwybRgZoVQNMsMxxONbSoAb
+B9tw8irock7zjkPYsqvjSAxcfV1I+J6qrwJBAJaFQEzMF8XpKOfk5SnNxFlw+3LC
+Spt47+VPFJNbCcxOWjAW4zlMFcBfQqDh27BX6fMPVm71E0UCIyK7JqwfVmECQAJ8
+8qcLaIhy5ff/11j9XxJda9t5rh0+Rsa+Wes52tPqDYJJP21UMHD4qX1SHnaeAWMn
+nG/UtfXPYdFC8GrDszMCQHNHjkRPhgnFKZBIqg6CjWE0wVWdZRWwLrP7a2YQsX4A
+aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
+-----END RSA PRIVATE KEY-----
+"""
+
+    def start(self):
+        self.start_agent()
+        self.load_keys()
+        return self
+
+    def start_agent(self):
+        output = subprocess.check_output('ssh-agent')
+        self.socket_path = re.search('SSH_AUTH_SOCK=(.+?);', output).group(1)
+        self.agent_pid = int(re.search('SSH_AGENT_PID=(\d+)', output).group(1))
+
+    def load_keys(self):
+        key_name = 'a_test_ssh_key'
+        key_file = tempfile.NamedTemporaryFile(prefix=key_name + '.')
+        key_file.write(self.TEST_KEY)
+        key_file.flush()
+        ssh_add_env = dict(os.environ)
+        ssh_add_env['SSH_AUTH_SOCK'] = self.socket_path
+        subprocess.check_output(
+            ['ssh-add', key_file.name],
+            env=ssh_add_env,
+            stderr=subprocess.PIPE)
+
+    def stop(self):
+        os.kill(self.agent_pid, signal.SIGKILL)
+
+
+class SSHTest(unittest.TestCase):
+    def setUp(self):
+        self.ssh_fixture = SSHTestFixture().start()
+
+    def test_identities(self):
+        ssh = SSH(self.ssh_fixture.socket_path)
+        keys = ssh.identities()
+        self.assertEqual(len(keys), 1, "number of keys loaded in agent")
+
+    def test_sign(self):
+        ssh = SSH(self.ssh_fixture.socket_path)
+        key = ssh.identities()[0]
+        message = "Hello, world!"
+        expected_digest = "791c659db0f314126ff0226beaa25aa6b8c4f00e"
+        for _ in range(0, 3):
+            signature = ssh.sign(key, message)
+            actual_digest = hashlib.sha1(signature).hexdigest()
+            self.assertEqual(expected_digest, actual_digest)
+
+    def tearDown(self):
+        self.ssh_fixture.stop()
 
 
 class Scrypt(object):
@@ -192,6 +277,28 @@ class Scrypt(object):
                 return
 
 
+class TestFiles(object):
+    def __init__(self, message):
+        self.f0 = tempfile.NamedTemporaryFile()
+        self.f1 = tempfile.NamedTemporaryFile()
+        self.f2 = tempfile.NamedTemporaryFile()
+        self.f0.write(message)
+        self.f0.flush()
+
+
+class ScryptTest(unittest.TestCase):
+    message = "Hello, world!"
+
+    def setUp(self):
+        self.files = TestFiles(self.message)
+
+    def test_encrypt_then_decrypt(self):
+        c = Scrypt()
+        c.encrypt(self.files.f0.name, self.files.f1.name, 'PASSPHRASE')
+        c.decrypt(self.files.f1.name, self.files.f2.name, 'PASSPHRASE')
+        self.assertEqual(self.message, self.files.f2.read(), "result of decrypt")
+
+
 class SSHScrypt(object):
     MAGIC = "https://haz.cat/ssh-crypt"
 
@@ -242,90 +349,23 @@ class SSHScrypt(object):
         return tmp_file
 
 
-def test():
-    TEST_KEY = """
------BEGIN RSA PRIVATE KEY-----
-MIICXAIBAAKBgQD0OCPZ50akyXxhyFz/JdCTZISvHJ+nFOnXMHKQzF3Q3fAbXGVM
-jEU2Wer+owj6s4wxuNmd6g3XAyyomCSRoxE6txNpQ10Yay4ZUMhO3XDr3zN5WBhd
-6dqDjNLsrfu5mjy9aWFZDpBYnmRnOQBeLGxNQE6shbwOAzsixirmiUyXBQIDAQAB
-AoGAZwCallgGIpBcZn10Q6S2UMQPdi/TYkveyITFfS7Ezsgccd3JV7y9oEvSYi1v
-JxW9Jmd5WTITPkE3f7ATlF07cT5EZaHPMHm02GJegopN1AW2caoN2N+FHpe2cnOW
-0vLtV+dQ0j5QnCWOfPpM70wYqEwvO+tC9uIaIOCBVTdyF20CQQD7IxTeZjiirZ0M
-SlSPZmNRlFBRUkHjc4I7A5weV5L5YR/LWN2W/RL0j+v60L18Uld0pGcDuYX1Fg42
-oUYEazaLAkEA+PLEMtU7vh3d9PtyDyIG7prcAJnUljwybRgZoVQNMsMxxONbSoAb
-B9tw8irock7zjkPYsqvjSAxcfV1I+J6qrwJBAJaFQEzMF8XpKOfk5SnNxFlw+3LC
-Spt47+VPFJNbCcxOWjAW4zlMFcBfQqDh27BX6fMPVm71E0UCIyK7JqwfVmECQAJ8
-8qcLaIhy5ff/11j9XxJda9t5rh0+Rsa+Wes52tPqDYJJP21UMHD4qX1SHnaeAWMn
-nG/UtfXPYdFC8GrDszMCQHNHjkRPhgnFKZBIqg6CjWE0wVWdZRWwLrP7a2YQsX4A
-aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
------END RSA PRIVATE KEY-----
-"""
+class SSHScryptTest(unittest.TestCase):
+    message = "Hello, secret world!"
 
-    def assert_equal(expected, actual, what):
-        if expected != actual:
-            raise UserException(
-                "{}: expected '{}' but got '{}'"
-                .format(what, expected, actual))
+    def setUp(self):
+        self.ssh_fixture = SSHTestFixture().start()
+        self.files = TestFiles(self.message)
 
-    # Packer
-    import StringIO
-    message = "Hello, world!"
-    io = StringIO.StringIO()
-    pack = Packer.for_file(io)
-    pack.write(pack.byte(99), pack.string(message))
-    io.seek(0)
-    assert_equal(pack.read_long(), 18, "total pack length")
-    assert_equal(pack.read_byte(), 99, "packed byte")
-    assert_equal(pack.read_string(), message, "packed string")
+    def test_encrypt_then_decrypt(self):
+        ssh = SSH(self.ssh_fixture.socket_path)
+        key = ssh.identities()[0]
+        c = SSHScrypt()
+        c.encrypt(self.files.f0.name, self.files.f1.name, ssh, key)
+        c.decrypt(self.files.f1.name, self.files.f2.name, ssh, key)
+        self.assertEqual(self.message, self.files.f2.read())
 
-    # SSH
-    import re
-    import signal
-    import subprocess
-    import tempfile
-    # - Start an agent
-    output = subprocess.check_output('ssh-agent')
-    socket_path = re.search('SSH_AUTH_SOCK=(.+?);', output).group(1)
-    agent_pid = int(re.search('SSH_AGENT_PID=(\d+)', output).group(1))
-    # - Make and load keys
-    os.putenv('SSH_AUTH_SOCK', socket_path)
-    key_name = 'a_test_ssh_key'
-    key_file = tempfile.NamedTemporaryFile(prefix=key_name + '.')
-    key_file.write(TEST_KEY)
-    key_file.flush()
-    subprocess.check_output(['ssh-add', key_file.name], stderr=subprocess.PIPE)
-    # - Test SSH
-    ssh = SSH(socket_path)
-    keys = ssh.identities()
-    assert_equal(len(keys), 1, "number of keys loaded in agent")
-    key = keys[0]
-
-    def create_test_files():
-        file0 = tempfile.NamedTemporaryFile()
-        file1 = tempfile.NamedTemporaryFile()
-        file2 = tempfile.NamedTemporaryFile()
-        file0.write(message)
-        file0.flush()
-        return (file0, file1, file2)
-
-    # Scrypt
-    log("testing Scrypt class")
-    file0, file1, file2 = create_test_files()
-    c = Scrypt()
-    c.encrypt(file0.name, file1.name, 'PASSPHRASE')
-    c.decrypt(file1.name, file2.name, 'PASSPHRASE')
-    assert_equal(message, file2.read(), "result of decrypt")
-
-    # SSHScrypt
-    log("testing SSHScrypt class")
-    file0, file1, file2 = create_test_files()
-    c = SSHScrypt()
-    c.encrypt(file0.name, file1.name, ssh, key)
-    c.decrypt(file1.name, file2.name, ssh, key)
-    assert_equal(message, file2.read(), "result of SSHScrypt decrypt")
-
-    # ...and tidy up.
-    os.kill(agent_pid, signal.SIGKILL)
+    def tearDown(self):
+        self.ssh_fixture.stop()
 
 
 def main():
@@ -346,13 +386,16 @@ def main():
         help='use the ssh key whose comment matches MATCH')
     parser.add_argument(
         '--test',
-        action='store_true',
+        nargs='*',
+        metavar='ARGS',
         help='run the test suite')
     args = parser.parse_args()
 
-    if args.test:
-        test()
-        sys.exit(0)
+    if args.test is not None:
+        unittest_args = [__file__]
+        unittest_args.extend(args.test)
+        unittest.main(argv=unittest_args)
+        print("!!")
 
     if not(args.encrypt or args.decrypt):
         parser.error("please select one of --encrypt or --decrypt")
