@@ -197,7 +197,7 @@ class SSHScrypt(object):
 
     def encrypt(self, in_file, out_file, ssh, key):
         assert_exists(in_file)
-        nonce = os.urandom(128)
+        nonce = SSHScrypt.checksum(in_file)
         signature = ssh.sign(key, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
         tmp_file = self.tmp_for(out_file)
@@ -221,6 +221,14 @@ class SSHScrypt(object):
             with open(tmp_file, 'w') as tmp_io:
                 shutil.copyfileobj(in_io, tmp_io)
         Scrypt().decrypt(tmp_file, out_file, passphrase)
+
+    @staticmethod
+    def checksum(file):
+        sha = hashlib.sha1()
+        with open(file, 'rb') as f:
+            for block in iter(lambda: f.read(4096), b""):
+                sha.update(block)
+        return sha.hexdigest()
 
     @staticmethod
     def tmp_for(file):
