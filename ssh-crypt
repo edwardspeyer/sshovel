@@ -368,7 +368,7 @@ class SSHScryptTest(unittest.TestCase):
         self.ssh_fixture.stop()
 
 
-def main():
+def main(args):
     parser = argparse.ArgumentParser(description='Encrypt files with ssh keys')
     parser.add_argument(
         '--encrypt',
@@ -389,13 +389,12 @@ def main():
         nargs='*',
         metavar='ARGS',
         help='run the test suite')
-    args = parser.parse_args()
+    args = parser.parse_args(args)
 
     if args.test is not None:
         unittest_args = [__file__]
         unittest_args.extend(args.test)
         unittest.main(argv=unittest_args)
-        print("!!")
 
     if not(args.encrypt or args.decrypt):
         parser.error("please select one of --encrypt or --decrypt")
@@ -436,8 +435,25 @@ def main():
         SSHScrypt().decrypt(in_file, out_file, ssh, key)
 
 
+class MainTest(unittest.TestCase):
+    message = "SUPER SECRET FILE CONTENTS"
+
+    def setUp(self):
+        self.files = TestFiles(self.message)
+        self.ssh_fixture = SSHTestFixture().start()
+        os.environ['SSH_AUTH_SOCK'] = self.ssh_fixture.socket_path
+
+    def test_encrypt(self):
+        main(['--encrypt', self.files.f0.name, self.files.f1.name])
+        main(['--decrypt', self.files.f1.name, self.files.f2.name])
+        self.assertEqual(self.message, self.files.f2.read())
+
+    def tearDown(self):
+        self.ssh_fixture.stop()
+
+
 try:
-    main()
+    main(sys.argv[1:])
 except UserException as ex:
     log(ex.message)
     sys.exit(1)
