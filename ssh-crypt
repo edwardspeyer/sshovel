@@ -390,27 +390,23 @@ class SSHEncrypter(object):
 
     MAGIC = "HAZ.CAT/SSH-CRYPT"
 
-    def __init__(self, encrypter, ssh, key):
-        self.encrypter = encrypter
-        self.ssh = ssh
-        self.key = key
-
-    def encrypt(self, in_file, out_file, passphrase=''):
+    def encrypt(self, in_file, out_file, ssh, key, encrypter):
         assert_exists(in_file)
         nonce = SSHEncrypter.checksum(in_file)
-        complete_passphrase = self.sign(nonce, passphrase)
+        signature = ssh.sign(key, nonce)
+        passphrase = hashlib.sha1(signature).hexdigest()
         tmp_file = self.tmp_for(out_file)
-        self.encrypter.encrypt(in_file, tmp_file, complete_passphrase)
+        encrypter.encrypt(in_file, tmp_file, passphrase)
         with open(out_file, 'w') as out_io:
             out_io.write(self.MAGIC)
             out_io.write(Packer.string(nonce))
             with open(tmp_file) as tmp_io:
                 shutil.copyfileobj(tmp_io, out_io)
 
-    def decrypt(self, in_file, out_file, passphrase=''):
+    def decrypt(self, in_file, out_file, ssh, key, encrypter):
         assert_exists(in_file)
         tmp_file = self.tmp_for(out_file)
-        complete_passphrase = None
+        passphrase = None
         with open(in_file) as in_io:
             magic = in_io.read(len(self.MAGIC))
             if magic != self.MAGIC:
@@ -419,17 +415,11 @@ class SSHEncrypter(object):
                     .format(self.MAGIC))
             packer = Packer.for_file(in_io)
             nonce = packer.read_string()
-            complete_passphrase = self.sign(nonce, passphrase)
+            signature = ssh.sign(key, nonce)
+            passphrase = hashlib.sha1(signature).hexdigest()
             with open(tmp_file, 'w') as tmp_io:
                 shutil.copyfileobj(in_io, tmp_io)
-        self.encrypter.decrypt(tmp_file, out_file, complete_passphrase)
-
-    def sign(self, nonce, passphrase):
-        h = hashlib.sha1()
-        h.update(passphrase)
-        signature = self.ssh.sign(self.key, nonce)
-        h.update(signature)
-        return h.hexdigest()
+        encrypter.decrypt(tmp_file, out_file, passphrase)
 
     @staticmethod
     def checksum(path):
@@ -460,10 +450,9 @@ class SSHEncrypterTest(unittest.TestCase):
         files = TestFiles(message)
         ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
-        rot13 = Rot13()
-        encrypter = SSHEncrypter(rot13, ssh, key)
-        encrypter.encrypt(files.f0.name, files.f1.name)
-        encrypter.decrypt(files.f1.name, files.f2.name)
+        encrypter = Rot13()
+        SSHEncrypter().encrypt(files.f0.name, files.f1.name, ssh, key, encrypter)
+        SSHEncrypter().decrypt(files.f1.name, files.f2.name, ssh, key, encrypter)
         self.assertEqual(message, files.f2.read())
 
     def tearDown(self):
@@ -546,14 +535,12 @@ def main(args):
 
     log("using ssh-agent key: {}".format(key.comment))
 
-    ssh_encrypter = SSHEncrypter(encrypter, ssh, key)
-
     if args.encrypt:
         in_file, out_file = args.encrypt
-        ssh_encrypter.encrypt(in_file, out_file)
+        SSHEncrypter().encrypt(in_file, out_file, ssh, key, encrypter)
     elif args.decrypt:
         in_file, out_file = args.decrypt
-        ssh_encrypter.decrypt(in_file, out_file)
+        SSHEncrypter().decrypt(in_file, out_file, ssh, key, encrypter)
 
 
 class MainTest(unittest.TestCase):
