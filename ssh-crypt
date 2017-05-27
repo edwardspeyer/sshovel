@@ -323,6 +323,8 @@ class SSHScrypt(object):
             p = Packer.for_file(in_io)
             magic = p.read_string()
             nonce = p.read_string()
+            if magic != self.MAGIC:
+                raise UserException("input file is not in a recognisable format")
             signature = ssh.sign(key, nonce)
             passphrase = hashlib.sha1(signature).hexdigest()
             with open(tmp_file, 'w') as tmp_io:
