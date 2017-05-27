@@ -485,12 +485,12 @@ def main(args):
         description='Encrypt files with passphrases derived from ssh keys.')
     parser.add_argument(
         '--encrypt',
-        nargs=2,
+        nargs='*',
         metavar=('IN', 'OUT'),
         help='')
     parser.add_argument(
         '--decrypt',
-        nargs=2,
+        nargs='*',
         metavar=('IN', 'OUT'),
         help='')
     parser.add_argument(
@@ -506,6 +506,7 @@ def main(args):
         nargs='*',
         metavar='ARGS',
         help='run the test suite')
+
     args = parser.parse_args(args)
 
     if args.test is not None:
@@ -513,7 +514,7 @@ def main(args):
         unittest_args.extend(args.test)
         unittest.main(argv=unittest_args)
 
-    if not(args.encrypt or args.decrypt):
+    if args.encrypt is None and args.decrypt is None:
         parser.error("please select one of --encrypt or --decrypt")
 
     encrypter = Scrypt()
@@ -548,13 +549,32 @@ def main(args):
 
     log("using ssh-agent key: {}".format(key.comment))
 
-    if args.encrypt:
-        in_file, out_file = args.encrypt
+    files = args.encrypt or args.decrypt or []
+    files.extend(['-', '-'])
+    in_file = files[0]
+    out_file = files[1]
+
+    in_tmp = None
+    if in_file == '-':
+        in_tmp = tempfile.NamedTemporaryFile()
+        shutil.copyfileobj(sys.stdin, in_tmp)
+        in_tmp.flush()
+        in_file = in_tmp.name
+
+    out_tmp = None
+    if out_file == '-':
+        out_tmp = tempfile.NamedTemporaryFile()
+        out_file = out_tmp.name
+
+    if args.encrypt is not None:
         SSHEncrypter().encrypt(in_file, out_file, ssh, key, encrypter)
-    elif args.decrypt:
-        in_file, out_file = args.decrypt
+    elif args.decrypt is not None:
         SSHEncrypter().decrypt(in_file, out_file, ssh, key)
 
+    if out_tmp is not None:
+        out_tmp.seek(0)
+        shutil.copyfileobj(out_tmp, sys.stdout)
+        sys.stdout.flush()
 
 class MainTest(unittest.TestCase):
     message = "SUPER SECRET FILE CONTENTS"
