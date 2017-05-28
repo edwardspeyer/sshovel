@@ -549,8 +549,9 @@ def main(args):
         '--with',
         dest='encryptor',
         default='scrypt',
+        metavar='TOOL',
         choices=Encryptor.all_encryptor_names(),
-        help='encrypt with the given tool, (default: scrypt)')
+        help='encrypt with "scrypt" (default) or "openssl"')
     parser.add_argument(
         '--test',
         nargs='*',
@@ -561,13 +562,15 @@ def main(args):
         nargs='?',
         type=argparse.FileType('r'),
         default=sys.stdin,
-        metavar='IN')
+        metavar='IN',
+        help='a path, or "-" for stdin')
     parser.add_argument(
         'out_file',
         nargs='?',
         type=argparse.FileType('w'),
         default=sys.stdout,
-        metavar='OUT')
+        metavar='OUT',
+        help='a path, or "-" for stdout')
 
     args = parser.parse_args(args)
 
