@@ -509,6 +509,7 @@ class SSHEncryptor(object):
         encryptor.decrypt(enc_tmp.name, out_file, passphrase)
 
     def is_file_encrypted(self, in_file):
+        assert_exists(in_file)
         with open(in_file, 'r') as f:
             return self._read_magic(f)
 
