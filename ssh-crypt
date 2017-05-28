@@ -360,17 +360,15 @@ class Scrypt(Encryptor):
         pid, fd = self._fork('enc', in_file, out_file)
         self._send_passphrase(fd, passphrase)
         self._send_passphrase(fd, passphrase)
-        log("encrypting with scrypt...")
+        log("waiting for scrypt...")
         os.waitpid(pid, 0)
-        log("done!")
 
     def decrypt(self, in_file, out_file, passphrase):
         assert_exists(in_file)
         pid, fd = self._fork('dec', in_file, out_file)
         self._send_passphrase(fd, passphrase)
-        log("decrypting with scrypt...")
+        log("waiting for scrypt...")
         os.waitpid(pid, 0)
-        log("done!")
 
     @staticmethod
     def _fork(command, in_file, out_file):
