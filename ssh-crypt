@@ -602,21 +602,27 @@ def main(args):
                 "more than one key matched '{}': {}"
                 .format(args.key, [k.comment for k in matches]))
 
-    log("using key {}".format(key.comment))
-
     in_file = args.in_file
+    out_file = args.out_file
+
+    if in_file == '-' and out_file == '-':
+        log("encrypting stdin to stdout with key '{}'".format(key.comment))
+    elif in_file == '-':
+        log("encrypting stdin with key '{}'".format(key.comment))
+    elif out_file == '-':
+        log("encrypting to stdout with key '{}'".format(key.comment))
+    else:
+        log("encrypting with key '{}'".format(key.comment))
+
     in_tmp = None
     if in_file == '-':
-        log('reading from stdin')
         in_tmp = tempfile.NamedTemporaryFile()
         shutil.copyfileobj(sys.stdin, in_tmp)
         in_tmp.flush()
         in_file = in_tmp.name
 
-    out_file = args.out_file
     out_tmp = None
     if args.out_file == '-':
-        log('writing to stdout')
         out_tmp = tempfile.NamedTemporaryFile()
         out_file = out_tmp.name
 
