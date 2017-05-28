@@ -2,6 +2,20 @@
 """
 ssh-crypt: encrypt and decrypt files using ssh keys
 
+Todo:
+    - Only output base64; avoid binary output.  It's less forgiving on the
+      terminal.
+
+    - Include the key-blob in the encrypted file.
+
+    - Store (blob, nonce, sig) tuples for every key in ssh-agent, to make it
+      more likely that we can match one at decrypt time.
+
+        Downside: we leak all our public keys!
+
+    - Include random data alongside the plaintext.  Avoids known plaintext
+      attacks!
+
 References:
 
 [1] SSH Agent Protocol
