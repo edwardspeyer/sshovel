@@ -286,41 +286,6 @@ class Encryptor(object):
         raise UserException("unknown encryptor '{}'".format(name))
 
 
-class Rot13(Encryptor):
-    def encrypt(self, in_file, out_file, passphrase):
-        digest = hashlib.sha1(passphrase).hexdigest()
-        tmp = tempfile.NamedTemporaryFile()
-        self._rot13(in_file, tmp.name)
-        with open(out_file, 'w') as f:
-            f.write(digest)
-            shutil.copyfileobj(tmp, f)
-
-    def decrypt(self, in_file, out_file, passphrase):
-        digest = hashlib.sha1(passphrase).hexdigest()
-        tmp = tempfile.NamedTemporaryFile()
-        with open(in_file) as f:
-            _ = f.read(len(digest))  # Read the digest
-            shutil.copyfileobj(f, tmp)
-        tmp.flush()
-        return self._rot13(tmp.name, out_file)
-
-    @staticmethod
-    def _rot13(in_file, out_file):
-        script = 'tr a-zA-Z n-za-mA-ZA-M <{} >{}'.format(in_file, out_file)
-        subprocess.check_call(script, shell=True)
-
-
-class Rot13Test(unittest.TestCase):
-    def test_encrypt_then_decrypt(self):
-        message = 'Hello, world!'
-        passphrase = 'PASSPHRASE'
-        files = TestFiles(message)
-        encryptor = Rot13()
-        encryptor.encrypt(files.f0.name, files.f1.name, passphrase)
-        encryptor.decrypt(files.f1.name, files.f2.name, passphrase)
-        self.assertEqual(message, files.f2.read())
-
-
 class OpenSSL(Encryptor):
     def encrypt(self, in_file, out_file, passphrase):
         self._openssl('-e', in_file, out_file, passphrase)
@@ -411,15 +376,27 @@ class TestFiles(object):
         self.f0.flush()
 
 
-class ScryptTest(unittest.TestCase):
-    def test_encrypt_then_decrypt(self):
-        message = "Hello, world!"
+class EncryptorTest(object):
+    @staticmethod
+    def assertEncryptor(test, cls):
+        message = 'Hello, world!'
         passphrase = 'PASSPHRASE'
         files = TestFiles(message)
-        scrypt = Scrypt()
-        scrypt.encrypt(files.f0.name, files.f1.name, passphrase)
-        scrypt.decrypt(files.f1.name, files.f2.name, passphrase)
-        self.assertEqual(message, files.f2.read())
+        encryptor = cls()
+        encryptor.encrypt(files.f0.name, files.f1.name, passphrase)
+        encryptor.decrypt(files.f1.name, files.f2.name, passphrase)
+        test.assertEqual(message, files.f2.read(), cls.__name__)
+
+
+class OpenSSLTest(unittest.TestCase):
+    def test_encryptor(self):
+        EncryptorTest.assertEncryptor(self, OpenSSL)
+
+
+class ScryptTest(unittest.TestCase):
+    def test_encryptor(self):
+        EncryptorTest.assertEncryptor(self, Scrypt)
+
 
 
 class SSHEncryptor(object):
@@ -534,7 +511,7 @@ class SSHEncryptorTest(unittest.TestCase):
         files = TestFiles(message)
         ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
-        encryptor = Rot13()
+        encryptor = OpenSSL()
         SSHEncryptor().encrypt(
             files.f0.name, files.f1.name, ssh, key, encryptor)
         SSHEncryptor().decrypt(files.f1.name, files.f2.name, ssh)
@@ -545,7 +522,7 @@ class SSHEncryptorTest(unittest.TestCase):
         files = TestFiles(message)
         ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
-        encryptor = Rot13()
+        encryptor = OpenSSL()
         SSHEncryptor().encrypt(
             files.f0.name, files.f1.name, ssh, key, encryptor)
         self.ssh_fixture.delete_keys()
