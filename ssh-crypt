@@ -2,14 +2,6 @@
 """
 ssh-crypt: encrypt and decrypt files using ssh keys
 
-Todo:
-    - Include the key-blob in the encrypted file.
-
-    - Store (blob, nonce, sig) tuples for every key in ssh-agent, to make it
-      more likely that we can match one at decrypt time.
-
-        Downside: we leak all our public keys!
-
 References:
 
 [1] SSH Agent Protocol
