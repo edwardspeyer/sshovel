@@ -237,12 +237,17 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
         key_file = tempfile.NamedTemporaryFile(prefix=key_name + '.')
         key_file.write(self.TEST_KEY)
         key_file.flush()
-        ssh_add_env = dict(os.environ)
-        ssh_add_env['SSH_AUTH_SOCK'] = self.socket_path
-        subprocess.check_output(
-            ['ssh-add', key_file.name],
-            env=ssh_add_env,
-            stderr=subprocess.PIPE)
+        self._ssh_add(key_file.name)
+
+    def delete_keys(self):
+        self._ssh_add('-D')
+
+    def _ssh_add(self, *args):
+        command = ['ssh-add']
+        command.extend(args)
+        env = dict(os.environ)
+        env['SSH_AUTH_SOCK'] = self.socket_path
+        subprocess.check_call(command, env=env, stderr=subprocess.PIPE)
 
     def stop(self):
         os.kill(self.agent_pid, signal.SIGKILL)
@@ -493,8 +498,12 @@ class SSHEncryptor(object):
         base64.decode(b64_tmp, enc_tmp)
         enc_tmp.flush()
         enc_tmp.seek(0)
-        log('decrypting with {} and {}'.format(key_comment, encryptor_name))
         signature = ssh.sign(key_blob, nonce)
+        if signature == None:
+            raise UserException(
+                "file is encrypted with a key we don't have: {}".format(
+                    key_comment))
+        log('decrypting with {} and {}'.format(key_comment, encryptor_name))
         passphrase = hashlib.sha1(signature).hexdigest()
         encryptor = Encryptor.instance_of(encryptor_name)
         encryptor.decrypt(enc_tmp.name, out_file, passphrase)
@@ -552,6 +561,23 @@ class SSHEncryptorTest(unittest.TestCase):
             files.f0.name, files.f1.name, ssh, key, encryptor)
         SSHEncryptor().decrypt(files.f1.name, files.f2.name, ssh)
         self.assertEqual(message, files.f2.read())
+
+    def test_missing_key(self):
+        message = "Hello, secret world!"
+        files = TestFiles(message)
+        ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
+        key = ssh.identities()[0]
+        encryptor = Rot13()
+        SSHEncryptor().encrypt(
+            files.f0.name, files.f1.name, ssh, key, encryptor)
+        self.ssh_fixture.delete_keys()
+        ex = None
+        try:
+            SSHEncryptor().decrypt(files.f1.name, files.f2.name, ssh)
+        except UserException as ex:
+            pass
+        self.assertIsNotNone(ex)
+        self.assertTrue("key we don't have" in str(ex))
 
     def tearDown(self):
         self.ssh_fixture.stop()
