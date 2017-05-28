@@ -20,3 +20,18 @@ index 76b754e..d284bea 100755
  require 'socket'
  
  # https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
+
+ssh-agent key blob format:
+    http://twistedmatrix.com/documents/8.2.0/api/twisted.conch.ssh.keys.Key.html#blob
+
+(n,e) -> PEM:
+    https://stackoverflow.com/questions/11541192/creating-a-rsa-public-key-from-its-modulus-and-exponent
+
+http://krisjordan.com/essays/encrypting-with-rsa-key-pairs
+
+PKCS8 format:
+https://unix.stackexchange.com/a/358709/233034
+
+...nope, while it's possible to get the public key from the ssh-agent, and to
+use that key to encrypt data using RSA, there's no corresponding ssh-agent
+function for taking encrypted data and decrypting it in the agent.
