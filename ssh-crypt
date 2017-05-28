@@ -288,6 +288,7 @@ class Encryptor(object):
                 return cls()
         raise UserException("unknown encryptor '{}'".format(name))
 
+
 class Rot13(Encryptor):
     def encrypt(self, in_file, out_file, passphrase):
         digest = hashlib.sha1(passphrase).hexdigest()
@@ -519,6 +520,7 @@ class SSHEncryptor(object):
     def _end_line(self):
         return '-----END {}-----\r\n'.format(self.MAGIC)
 
+
 class SSHEncryptorTest(unittest.TestCase):
     def setUp(self):
         self.ssh_fixture = SSHTestFixture()
@@ -529,8 +531,10 @@ class SSHEncryptorTest(unittest.TestCase):
         ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
         encryptor = Rot13()
-        SSHEncryptor().encrypt(files.f0.name, files.f1.name, ssh, key, encryptor)
-        SSHEncryptor().decrypt(files.f1.name, files.f2.name, ssh, key)
+        SSHEncryptor().encrypt(
+            files.f0.name, files.f1.name, ssh, key, encryptor)
+        SSHEncryptor().decrypt(
+            files.f1.name, files.f2.name, ssh, key)
         self.assertEqual(message, files.f2.read())
 
     def tearDown(self):
