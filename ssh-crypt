@@ -68,11 +68,11 @@ class Packer(object):
         return struct.pack(template, length, a_string)
 
     @classmethod
-    def for_socket(cls, a_socket):
+    def from_socket(cls, a_socket):
         return cls(a_socket.recv, a_socket.sendall)
 
     @classmethod
-    def for_file(cls, a_file):
+    def from_file(cls, a_file):
         return cls(a_file.read, a_file.write)
 
     def __init__(self, read_fn, write_fn):
@@ -105,7 +105,7 @@ class PackerTest(unittest.TestCase):
     def test_read_then_write(self):
         message = "Hello, world!"
         sio = StringIO.StringIO()
-        pack = Packer.for_file(sio)
+        pack = Packer.from_file(sio)
         pack.write(pack.byte(99), pack.string(message))
         sio.seek(0)
         self.assertEqual(pack.read_long(), 18, "total pack length")
@@ -131,7 +131,7 @@ class SSHAgentConnection(object):
     def __init__(self, socket_path):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
         sock.connect(socket_path)
-        self.packer = Packer.for_socket(sock)
+        self.packer = Packer.from_socket(sock)
 
     def identities(self):
         self.packer.write(
@@ -235,7 +235,7 @@ class SSHAgentConnectionTest(unittest.TestCase):
         self.ssh_fixture.stop()
 
 
-class Encrypter(object):
+class Encryptor(object):
     def encrypt(self, in_file, out_file, passphrase):
         pass
 
@@ -243,19 +243,19 @@ class Encrypter(object):
         pass
 
     @staticmethod
-    def all_encrypter_names():
+    def all_encryptor_names():
         return [
             cls.__name__.lower()
-            for cls in Encrypter.__subclasses__()]
+            for cls in Encryptor.__subclasses__()]
 
     @staticmethod
     def instance_of(name):
-        for cls in Encrypter.__subclasses__():
+        for cls in Encryptor.__subclasses__():
             if cls.__name__.lower() == name.lower():
                 return cls()
-        raise UserException("unknown encrypter '{}'".format(name))
+        raise UserException("unknown encryptor '{}'".format(name))
 
-class Rot13(Encrypter):
+class Rot13(Encryptor):
     def encrypt(self, in_file, out_file, passphrase):
         digest = hashlib.sha1(passphrase).hexdigest()
         tmp = tempfile.NamedTemporaryFile()
@@ -284,13 +284,13 @@ class Rot13Test(unittest.TestCase):
         message = 'Hello, world!'
         passphrase = 'PASSPHRASE'
         files = TestFiles(message)
-        crypter = Rot13()
-        crypter.encrypt(files.f0.name, files.f1.name, passphrase)
-        crypter.decrypt(files.f1.name, files.f2.name, passphrase)
+        encryptor = Rot13()
+        encryptor.encrypt(files.f0.name, files.f1.name, passphrase)
+        encryptor.decrypt(files.f1.name, files.f2.name, passphrase)
         self.assertEqual(message, files.f2.read())
 
 
-class OpenSSL(Encrypter):
+class OpenSSL(Encryptor):
     def encrypt(self, in_file, out_file, passphrase):
         self._openssl('-e', in_file, out_file, passphrase)
 
@@ -312,7 +312,7 @@ class OpenSSL(Encrypter):
         subprocess.check_call(command)
 
 
-class Scrypt(Encrypter):
+class Scrypt(Encryptor):
     """
     Interface to the scrypt(1) command line tool.
     """
@@ -395,7 +395,7 @@ class ScryptTest(unittest.TestCase):
         self.assertEqual(message, files.f2.read())
 
 
-class SSHEncrypter(object):
+class SSHEncryptor(object):
     """
     Interface to scrypt(1) that uses an ssh-agent(1) to generate the scrypt
     passphrase.
@@ -404,17 +404,17 @@ class SSHEncrypter(object):
     MAGIC = "HAZ.CAT/SSH-CRYPT"
     VERSION = "V1"
 
-    def encrypt(self, in_file, out_file, ssh, key, encrypter):
+    def encrypt(self, in_file, out_file, ssh, key, encryptor):
         assert_exists(in_file)
-        nonce = SSHEncrypter.checksum(in_file)
+        nonce = SSHEncryptor.checksum(in_file)
         signature = ssh.sign(key, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
         tmp_file = self.tmp_for(out_file)
-        encrypter.encrypt(in_file, tmp_file, passphrase)
+        encryptor.encrypt(in_file, tmp_file, passphrase)
         with open(out_file, 'w') as out_io:
             out_io.write(self.MAGIC)
             out_io.write(Packer.string(self.VERSION))
-            out_io.write(Packer.string(encrypter.__class__.__name__))
+            out_io.write(Packer.string(encryptor.__class__.__name__))
             out_io.write(Packer.string(nonce))
             with open(tmp_file) as tmp_io:
                 shutil.copyfileobj(tmp_io, out_io)
@@ -423,24 +423,24 @@ class SSHEncrypter(object):
         assert_exists(in_file)
         tmp_file = self.tmp_for(out_file)
         passphrase = None
-        encrypter_name = None
+        encryptor_name = None
         with open(in_file) as in_io:
             magic = in_io.read(len(self.MAGIC))
             if magic != self.MAGIC:
                 raise UserException(
                     "unrecognized format; did not find magic number '{}'"
                     .format(self.MAGIC))
-            packer = Packer.for_file(in_io)
+            packer = Packer.from_file(in_io)
             _ = packer.read_string()  # Version, unused.
-            encrypter_name = packer.read_string()
+            encryptor_name = packer.read_string()
             nonce = packer.read_string()
             signature = ssh.sign(key, nonce)
             passphrase = hashlib.sha1(signature).hexdigest()
 
             with open(tmp_file, 'w') as tmp_io:
                 shutil.copyfileobj(in_io, tmp_io)
-        encrypter = Encrypter.instance_of(encrypter_name)
-        encrypter.decrypt(tmp_file, out_file, passphrase)
+        encryptor = Encryptor.instance_of(encryptor_name)
+        encryptor.decrypt(tmp_file, out_file, passphrase)
 
     @staticmethod
     def checksum(path):
@@ -462,7 +462,7 @@ class SSHEncrypter(object):
         return tmp_file
 
 
-class SSHEncrypterTest(unittest.TestCase):
+class SSHEncryptorTest(unittest.TestCase):
     def setUp(self):
         self.ssh_fixture = SSHTestFixture()
 
@@ -471,9 +471,9 @@ class SSHEncrypterTest(unittest.TestCase):
         files = TestFiles(message)
         ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
-        encrypter = Rot13()
-        SSHEncrypter().encrypt(files.f0.name, files.f1.name, ssh, key, encrypter)
-        SSHEncrypter().decrypt(files.f1.name, files.f2.name, ssh, key)
+        encryptor = Rot13()
+        SSHEncryptor().encrypt(files.f0.name, files.f1.name, ssh, key, encryptor)
+        SSHEncryptor().decrypt(files.f1.name, files.f2.name, ssh, key)
         self.assertEqual(message, files.f2.read())
 
     def tearDown(self):
@@ -498,8 +498,8 @@ def main(args):
         metavar='MATCH',
         help='use the ssh key whose comment matches MATCH')
     parser.add_argument(
-        '--encrypter',
-        choices=Encrypter.all_encrypter_names(),
+        '--encryptor',
+        choices=Encryptor.all_encryptor_names(),
         help='encrypt with the given tool, (default: scrypt)')
     parser.add_argument(
         '--test',
@@ -517,9 +517,9 @@ def main(args):
     if args.encrypt is None and args.decrypt is None:
         parser.error("please select one of --encrypt or --decrypt")
 
-    encrypter = Scrypt()
-    if args.encrypter:
-        encrypter = Encrypter.instance_of(args.encrypter)
+    encryptor = Scrypt()
+    if args.encryptor:
+        encryptor = Encryptor.instance_of(args.encryptor)
 
     socket_path = os.environ.get('SSH_AUTH_SOCK')
     if socket_path == "":
@@ -567,9 +567,9 @@ def main(args):
         out_file = out_tmp.name
 
     if args.encrypt is not None:
-        SSHEncrypter().encrypt(in_file, out_file, ssh, key, encrypter)
+        SSHEncryptor().encrypt(in_file, out_file, ssh, key, encryptor)
     elif args.decrypt is not None:
-        SSHEncrypter().decrypt(in_file, out_file, ssh, key)
+        SSHEncryptor().decrypt(in_file, out_file, ssh, key)
 
     if out_tmp is not None:
         out_tmp.seek(0)
