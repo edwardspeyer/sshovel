@@ -181,10 +181,10 @@ class SSHAgentConnection(object):
             result.append(key)
         return result
 
-    def sign(self, key, message, flags=0):
+    def sign(self, key_blob, message, flags=0):
         self.packer.write(
             self.packer.byte(SSHAgentConnection.AGENTC_SIGN_REQUEST),
-            self.packer.string(key.blob),
+            self.packer.string(key_blob),
             self.packer.string(message),
             self.packer.long(flags)
         )
@@ -260,7 +260,7 @@ class SSHAgentConnectionTest(unittest.TestCase):
         message = "Hello, world!"
         expected_digest = "791c659db0f314126ff0226beaa25aa6b8c4f00e"
         for _ in range(0, 3):
-            signature = ssh.sign(key, message)
+            signature = ssh.sign(key.blob, message)
             actual_digest = hashlib.sha1(signature).hexdigest()
             self.assertEqual(expected_digest, actual_digest)
 
@@ -439,23 +439,25 @@ class SSHEncryptor(object):
     def encrypt(self, in_file, out_file, ssh, key, encryptor):
         assert_exists(in_file)
         nonce = hashlib.sha1(os.urandom(64)).hexdigest()
-        signature = ssh.sign(key, nonce)
+        signature = ssh.sign(key.blob, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
         tmp_file = self.tmp_for(out_file)
         encryptor.encrypt(in_file, tmp_file, passphrase)
         with open(out_file, 'w') as out_io:
             out_io.write(self._begin_line())
-            self._write_key(out_io, 'Version', self.VERSION)
-            self._write_key(out_io, 'Encryptor', encryptor.__class__.__name__)
-            self._write_key(out_io, 'Nonce', nonce)
+            self._write_header(out_io, 'Version', self.VERSION)
+            self._write_header(out_io, 'Encryptor', encryptor.__class__.__name__)
+            self._write_header(out_io, 'Key', base64.b64encode(key.blob))
+            self._write_header(out_io, 'Nonce', nonce)
             out_io.write("\r\n")
             with open(tmp_file, 'r') as tmp_io:
                 base64.encode(tmp_io, out_io)
             out_io.write("-----END {}-----\r\n".format(self.MAGIC))
 
-    def decrypt(self, in_file, out_file, ssh, key):
+    def decrypt(self, in_file, out_file, ssh):
         assert_exists(in_file)
         b64_tmp = tempfile.NamedTemporaryFile()
+        key_blob = None
         nonce = None
         encryptor_name = None
         with open(in_file, 'r') as in_io:
@@ -463,9 +465,10 @@ class SSHEncryptor(object):
                 raise UserException(
                     "unrecognized format; did not find magic number '{}'"
                     .format(self.MAGIC))
-            version = self._read_key(in_io, 'Version')
-            encryptor_name = self._read_key(in_io, 'Encryptor')
-            nonce = self._read_key(in_io, 'Nonce')
+            version = self._read_header(in_io, 'Version')
+            encryptor_name = self._read_header(in_io, 'Encryptor')
+            key_blob = base64.b64decode(self._read_header(in_io, 'Key'))
+            nonce = self._read_header(in_io, 'Nonce')
             for line in in_io:
                 # Ignore the ----END line:
                 if line[0] == '-':
@@ -477,7 +480,7 @@ class SSHEncryptor(object):
         base64.decode(b64_tmp, enc_tmp)
         enc_tmp.flush()
         enc_tmp.seek(0)
-        signature = ssh.sign(key, nonce)
+        signature = ssh.sign(key_blob, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
         encryptor = Encryptor.instance_of(encryptor_name)
         encryptor.decrypt(enc_tmp.name, out_file, passphrase)
@@ -491,7 +494,7 @@ class SSHEncryptor(object):
         actual = f.read(len(expected))
         return actual == expected
 
-    def _read_key(self, f, key):
+    def _read_header(self, f, key):
         line = f.readline().rstrip()
         actual_key, value = line.split(': ')
         if actual_key != key:
@@ -500,7 +503,7 @@ class SSHEncryptor(object):
                 .format(key, line))
         return value
 
-    def _write_key(self, f, key, value):
+    def _write_header(self, f, key, value):
         f.write('{}: {}\r\n'.format(key, value))
 
     @staticmethod
@@ -533,8 +536,7 @@ class SSHEncryptorTest(unittest.TestCase):
         encryptor = Rot13()
         SSHEncryptor().encrypt(
             files.f0.name, files.f1.name, ssh, key, encryptor)
-        SSHEncryptor().decrypt(
-            files.f1.name, files.f2.name, ssh, key)
+        SSHEncryptor().decrypt(files.f1.name, files.f2.name, ssh)
         self.assertEqual(message, files.f2.read())
 
     def tearDown(self):
@@ -630,7 +632,7 @@ def main(args):
         args.encryptor))
 
     if is_file_encrypted:
-        ssh_encryptor.decrypt(in_file, out_file, ssh, key)
+        ssh_encryptor.decrypt(in_file, out_file, ssh)
     else:
         ssh_encryptor.encrypt(in_file, out_file, ssh, key, encryptor)
 
