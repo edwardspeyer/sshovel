@@ -13,9 +13,6 @@ Todo:
 
         Downside: we leak all our public keys!
 
-    - Include random data alongside the plaintext.  Avoids known plaintext
-      attacks!
-
 References:
 
 [1] SSH Agent Protocol
