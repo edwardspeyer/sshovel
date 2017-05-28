@@ -3,9 +3,6 @@
 ssh-crypt: encrypt and decrypt files using ssh keys
 
 Todo:
-    - Only output base64; avoid binary output.  It's less forgiving on the
-      terminal.
-
     - Include the key-blob in the encrypted file.
 
     - Store (blob, nonce, sig) tuples for every key in ssh-agent, to make it
@@ -42,6 +39,7 @@ from collections import namedtuple
 import StringIO
 import argparse
 import atexit
+import base64
 import fcntl
 import hashlib
 import os
@@ -435,59 +433,74 @@ class SSHEncryptor(object):
     """
 
     MAGIC = "HAZ.CAT/SSH-CRYPT"
-    VERSION = "V1"
+    VERSION = 1
 
     def encrypt(self, in_file, out_file, ssh, key, encryptor):
         assert_exists(in_file)
-        nonce = SSHEncryptor.checksum(in_file)
+        nonce = hashlib.sha1(os.urandom(64)).hexdigest()
         signature = ssh.sign(key, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
         tmp_file = self.tmp_for(out_file)
         encryptor.encrypt(in_file, tmp_file, passphrase)
         with open(out_file, 'w') as out_io:
-            out_io.write(self.MAGIC)
-            out_io.write(Packer.string(self.VERSION))
-            out_io.write(Packer.string(encryptor.__class__.__name__))
-            out_io.write(Packer.string(nonce))
-            with open(tmp_file) as tmp_io:
-                shutil.copyfileobj(tmp_io, out_io)
+            out_io.write(self._begin_line())
+            self._write_key(out_io, 'Version', self.VERSION)
+            self._write_key(out_io, 'Encryptor', encryptor.__class__.__name__)
+            self._write_key(out_io, 'Nonce', nonce)
+            out_io.write("\r\n")
+            with open(tmp_file, 'r') as tmp_io:
+                base64.encode(tmp_io, out_io)
+            out_io.write("-----END {}-----\r\n".format(self.MAGIC))
 
     def decrypt(self, in_file, out_file, ssh, key):
         assert_exists(in_file)
-        tmp_file = self.tmp_for(out_file)
-        passphrase = None
+        b64_tmp = tempfile.NamedTemporaryFile()
+        nonce = None
         encryptor_name = None
         with open(in_file, 'r') as in_io:
             if not self._read_magic(in_io):
                 raise UserException(
                     "unrecognized format; did not find magic number '{}'"
                     .format(self.MAGIC))
-            packer = Packer.from_file(in_io)
-            _ = packer.read_string()  # Version, unused.
-            encryptor_name = packer.read_string()
-            nonce = packer.read_string()
-            signature = ssh.sign(key, nonce)
-            passphrase = hashlib.sha1(signature).hexdigest()
-            with open(tmp_file, 'w') as tmp_io:
-                shutil.copyfileobj(in_io, tmp_io)
+            version = self._read_key(in_io, 'Version')
+            encryptor_name = self._read_key(in_io, 'Encryptor')
+            nonce = self._read_key(in_io, 'Nonce')
+            for line in in_io:
+                # Ignore the ----END line:
+                if line[0] == '-':
+                    break
+                b64_tmp.write(line.rstrip())
+        b64_tmp.flush()
+        b64_tmp.seek(0)
+        enc_tmp = tempfile.NamedTemporaryFile()
+        base64.decode(b64_tmp, enc_tmp)
+        enc_tmp.flush()
+        enc_tmp.seek(0)
+        signature = ssh.sign(key, nonce)
+        passphrase = hashlib.sha1(signature).hexdigest()
         encryptor = Encryptor.instance_of(encryptor_name)
-        encryptor.decrypt(tmp_file, out_file, passphrase)
+        encryptor.decrypt(enc_tmp.name, out_file, passphrase)
 
     def is_file_encrypted(self, in_file):
-        with open(in_file, 'r') as in_io:
-            return self._read_magic(in_io)
+        with open(in_file, 'r') as f:
+            return self._read_magic(f)
 
-    def _read_magic(self, in_io):
-        magic = in_io.read(len(self.MAGIC))
-        return magic == self.MAGIC
+    def _read_magic(self, f):
+        expected = self._begin_line()
+        actual = f.read(len(expected))
+        return actual == expected
 
-    @staticmethod
-    def checksum(path):
-        sha = hashlib.sha1()
-        with open(path, 'rb') as f:
-            for block in iter(lambda: f.read(4096), b""):
-                sha.update(block)
-        return sha.hexdigest()
+    def _read_key(self, f, key):
+        line = f.readline().rstrip()
+        actual_key, value = line.split(': ')
+        if actual_key != key:
+            raise UserException(
+                "did not find expected key {} in line: {}"
+                .format(key, line))
+        return value
+
+    def _write_key(self, f, key, value):
+        f.write('{}: {}\r\n'.format(key, value))
 
     @staticmethod
     def tmp_for(path):
@@ -500,6 +513,11 @@ class SSHEncryptor(object):
         atexit.register(lambda: os.remove(tmp_file))
         return tmp_file
 
+    def _begin_line(self):
+        return '-----BEGIN {}-----\r\n'.format(self.MAGIC)
+
+    def _end_line(self):
+        return '-----END {}-----\r\n'.format(self.MAGIC)
 
 class SSHEncryptorTest(unittest.TestCase):
     def setUp(self):
