@@ -460,9 +460,8 @@ class SSHEncryptor(object):
         tmp_file = self.tmp_for(out_file)
         passphrase = None
         encryptor_name = None
-        with open(in_file) as in_io:
-            magic = in_io.read(len(self.MAGIC))
-            if magic != self.MAGIC:
+        with open(in_file, 'r') as in_io:
+            if not self._read_magic(in_io):
                 raise UserException(
                     "unrecognized format; did not find magic number '{}'"
                     .format(self.MAGIC))
@@ -472,11 +471,18 @@ class SSHEncryptor(object):
             nonce = packer.read_string()
             signature = ssh.sign(key, nonce)
             passphrase = hashlib.sha1(signature).hexdigest()
-
             with open(tmp_file, 'w') as tmp_io:
                 shutil.copyfileobj(in_io, tmp_io)
         encryptor = Encryptor.instance_of(encryptor_name)
         encryptor.decrypt(tmp_file, out_file, passphrase)
+
+    def is_file_encrypted(self, in_file):
+        with open(in_file, 'r') as in_io:
+            return self._read_magic(in_io)
+
+    def _read_magic(self, in_io):
+        magic = in_io.read(len(self.MAGIC))
+        return magic == self.MAGIC
 
     @staticmethod
     def checksum(path):
@@ -520,21 +526,12 @@ def main(args):
     parser = argparse.ArgumentParser(
         description='Encrypt files with passphrases derived from ssh keys.')
     parser.add_argument(
-        '--encrypt',
-        nargs='*',
-        metavar=('IN', 'OUT'),
-        help='')
-    parser.add_argument(
-        '--decrypt',
-        nargs='*',
-        metavar=('IN', 'OUT'),
-        help='')
-    parser.add_argument(
         '--key',
         metavar='MATCH',
         help='use the ssh key whose comment matches MATCH')
     parser.add_argument(
-        '--encryptor',
+        '--with',
+        dest='encryptor',
         choices=Encryptor.all_encryptor_names(),
         help='encrypt with the given tool, (default: scrypt)')
     parser.add_argument(
@@ -542,6 +539,16 @@ def main(args):
         nargs='*',
         metavar='ARGS',
         help='run the test suite')
+    parser.add_argument(
+        'in_file',
+        nargs='?',
+        default='-',
+        metavar='IN')
+    parser.add_argument(
+        'out_file',
+        nargs='?',
+        default='-',
+        metavar='OUT')
 
     args = parser.parse_args(args)
 
@@ -549,9 +556,6 @@ def main(args):
         unittest_args = [__file__]
         unittest_args.extend(args.test)
         unittest.main(argv=unittest_args)
-
-    if args.encrypt is None and args.decrypt is None:
-        parser.error("please select one of --encrypt or --decrypt")
 
     encryptor = Scrypt()
     if args.encryptor:
@@ -583,29 +587,30 @@ def main(args):
                 "more than one key matched '{}': {}"
                 .format(args.key, [k.comment for k in matches]))
 
-    log("using ssh-agent key: {}".format(key.comment))
+    log("using key {}".format(key.comment))
 
-    files = args.encrypt or args.decrypt or []
-    files.extend(['-', '-'])
-    in_file = files[0]
-    out_file = files[1]
-
+    in_file = args.in_file
     in_tmp = None
     if in_file == '-':
+        log('reading from stdin')
         in_tmp = tempfile.NamedTemporaryFile()
         shutil.copyfileobj(sys.stdin, in_tmp)
         in_tmp.flush()
         in_file = in_tmp.name
 
+    out_file = args.out_file
     out_tmp = None
-    if out_file == '-':
+    if args.out_file == '-':
+        log('writing to stdout')
         out_tmp = tempfile.NamedTemporaryFile()
         out_file = out_tmp.name
 
-    if args.encrypt is not None:
-        SSHEncryptor().encrypt(in_file, out_file, ssh, key, encryptor)
-    elif args.decrypt is not None:
-        SSHEncryptor().decrypt(in_file, out_file, ssh, key)
+    ssh_encryptor = SSHEncryptor()
+
+    if ssh_encryptor.is_file_encrypted(in_file):
+        ssh_encryptor.decrypt(in_file, out_file, ssh, key)
+    else:
+        ssh_encryptor.encrypt(in_file, out_file, ssh, key, encryptor)
 
     if out_tmp is not None:
         out_tmp.seek(0)
@@ -622,8 +627,8 @@ class MainTest(unittest.TestCase):
         os.environ['SSH_AUTH_SOCK'] = self.ssh_fixture.socket_path
 
     def test_encrypt(self):
-        main(['--encrypt', self.files.f0.name, self.files.f1.name])
-        main(['--decrypt', self.files.f1.name, self.files.f2.name])
+        main(['--with', 'openssl', self.files.f0.name, self.files.f1.name])
+        main([self.files.f1.name, self.files.f2.name])
         self.assertEqual(self.message, self.files.f2.read())
 
     def tearDown(self):
