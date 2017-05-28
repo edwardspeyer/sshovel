@@ -600,6 +600,7 @@ def main(args):
         shutil.copyfileobj(out_tmp, sys.stdout)
         sys.stdout.flush()
 
+
 class MainTest(unittest.TestCase):
     message = "SUPER SECRET FILE CONTENTS"
 
