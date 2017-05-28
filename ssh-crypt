@@ -1,6 +1,30 @@
 #!/usr/bin/env python
 """
-ssh-crypt: encrypt and decrypt files using ssh keys.
+ssh-crypt: encrypt and decrypt files using ssh keys
+
+References:
+
+[1] SSH Agent Protocol
+Damien Miller, IETF
+https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
+
+[2] ssh-crypt: encrypt secrets with the SSH Agent
+Leigh McCulloch
+https://github.com/leighmcculloch/sshcrypt
+
+[3] Twisted Conch: an SSHv2 implementation written in Python
+http://twistedmatrix.com/documents/8.2.0/api/twisted.conch.ssh.keys.Key.html#blob
+
+[4] Stack Overflow: Creating a rsa public key from its modulus and exponent
+@qualcuno and @oliv
+https://stackoverflow.com/questions/11541192
+
+[5] Encryption with RSA Key Pairs
+Kris Jordan
+http://krisjordan.com/essays/encrypting-with-rsa-key-pairs
+
+[6] Convert an ssh-keygen public key into OpenSSL PEM format
+https://unix.stackexchange.com/a/358709/233034
 """
 
 from collections import namedtuple
