@@ -2,6 +2,12 @@
 """
 ssh-crypt: encrypt and decrypt files using ssh keys
 
+Todo:
+    - Handle agent errors.  agent.sign() may refuse none if we are missing
+      the key, or if the agent prompts us with a dialog that we dismiss.
+      We should look up keys to see if the agent has them, before using
+      them to sign data?
+
 References:
 
 [1] SSH Agent Protocol
