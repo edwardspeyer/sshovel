@@ -160,6 +160,7 @@ class SSHAgentConnection(object):
     AGENT_SIGN_RESPONSE = 14
     AGENT_RSA_SHA2_256 = 2
     AGENT_RSA_SHA2_512 = 4
+    AGENT_FAILURE = 5
 
     def __init__(self, socket_path):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
@@ -190,6 +191,8 @@ class SSHAgentConnection(object):
         )
         _ = self.packer.read_long()  # length
         response = self.packer.read_byte()
+        if response == SSHAgentConnection.AGENT_FAILURE:
+            return None
         assert response == SSHAgentConnection.AGENT_SIGN_RESPONSE
         signature = self.packer.read_string()
         return signature
