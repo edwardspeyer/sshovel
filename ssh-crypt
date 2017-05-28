@@ -275,16 +275,23 @@ class Encryptor(object):
     def decrypt(self, in_file, out_file, passphrase):
         pass
 
+    def name(self):
+        return Encryptor.name_of(self.__class__)
+
+    @staticmethod
+    def name_of(cls):
+        return cls.__name__.lower()
+
     @staticmethod
     def all_encryptor_names():
         return [
-            cls.__name__.lower()
+            Encryptor.name_of(cls)
             for cls in Encryptor.__subclasses__()]
 
     @staticmethod
     def instance_of(name):
         for cls in Encryptor.__subclasses__():
-            if cls.__name__.lower() == name.lower():
+            if Encryptor.name_of(cls) == name.lower():
                 return cls()
         raise UserException("unknown encryptor '{}'".format(name))
 
@@ -446,8 +453,9 @@ class SSHEncryptor(object):
         with open(out_file, 'w') as out_io:
             out_io.write(self._begin_line())
             self._write_header(out_io, 'Version', self.VERSION)
-            self._write_header(out_io, 'Encryptor', encryptor.__class__.__name__)
+            self._write_header(out_io, 'Encryptor', encryptor.name())
             self._write_header(out_io, 'Key', base64.b64encode(key.blob))
+            self._write_header(out_io, 'Comment', base64.b64encode(key.comment))
             self._write_header(out_io, 'Nonce', nonce)
             out_io.write("\r\n")
             with open(tmp_file, 'r') as tmp_io:
@@ -458,6 +466,7 @@ class SSHEncryptor(object):
         assert_exists(in_file)
         b64_tmp = tempfile.NamedTemporaryFile()
         key_blob = None
+        key_comment = None
         nonce = None
         encryptor_name = None
         with open(in_file, 'r') as in_io:
@@ -468,6 +477,7 @@ class SSHEncryptor(object):
             version = self._read_header(in_io, 'Version')
             encryptor_name = self._read_header(in_io, 'Encryptor')
             key_blob = base64.b64decode(self._read_header(in_io, 'Key'))
+            key_comment = base64.b64decode(self._read_header(in_io, 'Comment'))
             nonce = self._read_header(in_io, 'Nonce')
             for line in in_io:
                 # Ignore the ----END line:
@@ -480,6 +490,7 @@ class SSHEncryptor(object):
         base64.decode(b64_tmp, enc_tmp)
         enc_tmp.flush()
         enc_tmp.seek(0)
+        log('decrypting with {} and {}'.format(key_comment, encryptor_name))
         signature = ssh.sign(key_blob, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
         encryptor = Encryptor.instance_of(encryptor_name)
@@ -623,17 +634,14 @@ def main(args):
         out_file = out_tmp.name
 
     ssh_encryptor = SSHEncryptor()
-    is_file_encrypted = ssh_encryptor.is_file_encrypted(in_file)
 
-    log("{}{} with ssh-key '{}' and {}".format(
-        (is_file_encrypted and 'decrypting' or 'encrypting'),
-        (args.out_file == '-' and ' to stdout' or ''),
-        key.comment,
-        args.encryptor))
-
-    if is_file_encrypted:
+    if ssh_encryptor.is_file_encrypted(in_file):
         ssh_encryptor.decrypt(in_file, out_file, ssh)
     else:
+        log("encrypting{} with ssh-key '{}' and {}".format(
+            (args.out_file == '-' and ' to stdout' or ''),
+            key.comment,
+            args.encryptor))
         ssh_encryptor.encrypt(in_file, out_file, ssh, key, encryptor)
 
     if out_tmp is not None:
