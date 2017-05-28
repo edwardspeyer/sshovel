@@ -70,16 +70,6 @@ def log(message):
     sys.stderr.write(message)
 
 
-def assert_exists(path):
-    """
-    Check file exists and is a file, or alert the user.
-    """
-    if not os.path.exists(path):
-        raise UserException('file not found: {}'.format(path))
-    if os.path.isdir(path):
-        raise UserException('exists, but is a directory: {}'.format(path))
-
-
 class Packer(object):
     """
     Pack and unpack length prefixed binary data, as defined by the SSH
@@ -367,7 +357,6 @@ class Scrypt(Encryptor):
     """
 
     def encrypt(self, in_file, out_file, passphrase):
-        assert_exists(in_file)
         pid, fd = self._fork('enc', in_file, out_file)
         self._send_passphrase(fd, passphrase)
         self._send_passphrase(fd, passphrase)
@@ -375,7 +364,6 @@ class Scrypt(Encryptor):
         os.waitpid(pid, 0)
 
     def decrypt(self, in_file, out_file, passphrase):
-        assert_exists(in_file)
         pid, fd = self._fork('dec', in_file, out_file)
         self._send_passphrase(fd, passphrase)
         log("waiting for scrypt...")
@@ -452,7 +440,6 @@ class SSHEncryptor(object):
     VERSION = 1
 
     def encrypt(self, in_file, out_file, ssh, key, encryptor):
-        assert_exists(in_file)
         nonce = hashlib.sha1(os.urandom(64)).hexdigest()
         signature = ssh.sign(key.blob, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
@@ -471,7 +458,6 @@ class SSHEncryptor(object):
             out_io.write("-----END {}-----\r\n".format(self.MAGIC))
 
     def decrypt(self, in_file, out_file, ssh):
-        assert_exists(in_file)
         b64_tmp = tempfile.NamedTemporaryFile()
         key_blob = None
         key_comment = None
@@ -509,7 +495,6 @@ class SSHEncryptor(object):
         encryptor.decrypt(enc_tmp.name, out_file, passphrase)
 
     def is_file_encrypted(self, in_file):
-        assert_exists(in_file)
         with open(in_file, 'r') as f:
             return self._read_magic(f)
 
@@ -605,12 +590,14 @@ def main(args):
     parser.add_argument(
         'in_file',
         nargs='?',
-        default='-',
+        type=argparse.FileType('r'),
+        default=sys.stdin,
         metavar='IN')
     parser.add_argument(
         'out_file',
         nargs='?',
-        default='-',
+        type=argparse.FileType('w'),
+        default=sys.stdout,
         metavar='OUT')
 
     args = parser.parse_args(args)
@@ -648,18 +635,18 @@ def main(args):
                 "more than one key matched '{}': {}"
                 .format(args.key, [k.comment for k in matches]))
 
-    in_file = args.in_file
+    in_file = args.in_file.name
     in_tmp = None
-    if in_file == '-':
+    if in_file == '<stdin>':
         log('reading from stdin')
         in_tmp = tempfile.NamedTemporaryFile()
-        shutil.copyfileobj(sys.stdin, in_tmp)
+        shutil.copyfileobj(args.in_file, in_tmp)
         in_tmp.flush()
         in_file = in_tmp.name
 
-    out_file = args.out_file
+    out_file = args.out_file.name
     out_tmp = None
-    if args.out_file == '-':
+    if out_file == '<stdout>':
         out_tmp = tempfile.NamedTemporaryFile()
         out_file = out_tmp.name
 
