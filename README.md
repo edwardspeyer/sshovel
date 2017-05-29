@@ -93,10 +93,15 @@ The ssh-agent functions that sshovel uses are:
 [IETF44]: https://tools.ietf.org/id/draft-miller-ssh-agent-00.html#rfc.section.4.4
 [IETF45]: https://tools.ietf.org/id/draft-miller-ssh-agent-00.html#rfc.section.4.5
 
-Other approaches to using ssh-keys for encrypting data include using the
+Another approach I looked at was using the
 public and private parts of a key pair to perform public key cryptography.
-However, this requires having the private key available as a file,
-rather than via the ssh-agent, which is more restrictive than sshovel's approach.
+This has all the usual advantages: being able to encrypt a file for someone else,
+and being able to encrypt files for yourself without having to interact with either ssh-agent
+or the hardware security module containing the private key.
+However, this approach requires having the private key available as a file --
+the ssh-agent approach doesn't expose the private key, and if using an HSM,
+then you don't have access to the key at all.
+This is more restrictive than sshovel's approach.
 
 
 Acknowledgments
