@@ -104,8 +104,8 @@ then you don't have access to the key at all.
 This is more restrictive than sshovel's approach.
 
 
-Acknowledgments and References
-------------------------------
+References
+----------
 
 - [SSH Agent Protocol -- Damien Miller, IETF][IETF]:
   the ssh-agent protocol draft RFC.
