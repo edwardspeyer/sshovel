@@ -467,12 +467,12 @@ class SSHEncryptor(object):
         base64.decode(b64_tmp, enc_tmp)
         enc_tmp.flush()
         enc_tmp.seek(0)
+        log('decrypting with {} and {}'.format(key_comment, encryptor_name))
         signature = ssh.sign(key_blob, nonce)
         if signature == None:
             raise UserException(
                 "file is encrypted with a key we don't have: {}".format(
                     key_comment))
-        log('decrypting with {} and {}'.format(key_comment, encryptor_name))
         passphrase = hashlib.sha1(signature).hexdigest()
         encryptor = Encryptor.instance_of(encryptor_name)
         encryptor.decrypt(enc_tmp.name, out_file, passphrase)
