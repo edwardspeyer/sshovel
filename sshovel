@@ -505,11 +505,8 @@ class SSHEncryptor(object):
 
     @staticmethod
     def tmp_for(path):
-        dirname = os.path.dirname(path)
-        if dirname == '':
-            dirname = '.'
         basename = os.path.basename(path)
-        fd, tmp_file = tempfile.mkstemp(prefix='.'+basename, dir=dirname)
+        fd, tmp_file = tempfile.mkstemp(prefix='.'+basename)
         os.close(fd)
         atexit.register(lambda: os.remove(tmp_file))
         return tmp_file
@@ -614,10 +611,30 @@ class Main(object):
             sys.stdout.flush()
 
     def parse_args(self, args):
+        epilogue = u"""\
+examples:
+
+  - Default is to use scrypt(1) to encrypt:
+
+      $ shovel message.txt message.txt.enc
+
+
+  - If the input is encrypted, then the default action is to decrypt:
+
+      $ shovel message.txt.enc
+      Hello, world!
+
+
+  - Use a specific agent key (only needed for encrypt):
+
+      $ shovel --key my_other_key
+\u00A0
+"""
         parser = argparse.ArgumentParser(
-            description=(
-                'Encrypt files with passphrases '
-                'derived from ssh keys.'))
+            usage='%(prog)s [--with TOOL] [IN] [OUT]',
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            description='Encrypt files with ssh-agent, bury your secrets',
+            epilog=epilogue)
         parser.add_argument(
             '--key',
             metavar='MATCH',
@@ -640,14 +657,14 @@ class Main(object):
             type=argparse.FileType('r'),
             default=sys.stdin,
             metavar='IN',
-            help='a path, or "-" for stdin')
+            help='optional path, or "-" for stdin, which is the default')
         parser.add_argument(
             'out_file',
             nargs='?',
             type=argparse.FileType('w'),
             default=sys.stdout,
             metavar='OUT',
-            help='a path, or "-" for stdout')
+            help='as above, with stdout as the default')
         return parser.parse_args(args)
 
     def find_agent(self):
