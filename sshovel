@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-ssh-crypt: encrypt and decrypt files using ssh keys
+sshovel - encrypt files with ssh keys and bury your secrets
 
 Todo:
     - Handle agent errors.  agent.sign() may refuse none if we are missing
