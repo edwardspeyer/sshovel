@@ -14,6 +14,13 @@ sshovel: waiting for scrypt...
 hElLo, WoRld!
 ```
 
+Warning!
+--------
+
+sshovel is a proof of concept
+and almost certainly a good example of why rolling your own cryptography,
+without review, is a bad idea!
+
 Features
 --------
 
