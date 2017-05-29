@@ -30,6 +30,7 @@ Features
 - Single file script!
 - Easy to read!
 - Self-testing!
+- Whimsical name!
 
 
 Description
