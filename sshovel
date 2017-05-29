@@ -2,38 +2,13 @@
 """
 sshovel - encrypt files with ssh-agent, bury your secrets
 
-I should totally talk about this problem and write a sort of summary of it,
-right here!
+(c) 2016 Edward Speyer
 
 Todo:
     - Handle agent errors.  agent.sign() may refuse none if we are missing
       the key, or if the agent prompts us with a dialog that we dismiss.
       We should look up keys to see if the agent has them, before using
       them to sign data?
-
-References:
-
-[1] SSH Agent Protocol
-Damien Miller, IETF
-https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
-
-[2] ssh-crypt: encrypt secrets with the SSH Agent
-Leigh McCulloch
-https://github.com/leighmcculloch/sshcrypt
-
-[3] Twisted Conch: an SSHv2 implementation written in Python
-http://twistedmatrix.com/documents/8.2.0/api/twisted.conch.ssh.keys.Key.html#blob
-
-[4] Stack Overflow: Creating a rsa public key from its modulus and exponent
-@qualcuno and @oliv
-https://stackoverflow.com/questions/11541192
-
-[5] Encryption with RSA Key Pairs
-Kris Jordan
-http://krisjordan.com/essays/encrypting-with-rsa-key-pairs
-
-[6] Convert an ssh-keygen public key into OpenSSL PEM format
-https://unix.stackexchange.com/a/358709/233034
 """
 
 from collections import namedtuple
