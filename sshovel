@@ -2,6 +2,8 @@
 """
 sshovel - encrypt files with ssh-agent, bury your secrets
 
+https://haz.cat/sshovel/
+
 MIT License
 
 Copyright (c) 2017 Edward Speyer
