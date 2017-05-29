@@ -222,7 +222,7 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
 
     def load_keys(self):
         key_name = 'a_test_ssh_key'
-        key_file = tempfile.NamedTemporaryFile(prefix=key_name + '.')
+        key_file = tempfile.NamedTemporaryFile(dir='/tmp', prefix=key_name + '.')
         key_file.write(self.TEST_KEY)
         key_file.flush()
         self._ssh_add(key_file.name)
