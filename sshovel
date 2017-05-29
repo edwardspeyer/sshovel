@@ -441,7 +441,7 @@ class SSHEncryptor(object):
     passphrase.
     """
 
-    MAGIC = "HAZ.CAT/SSH-CRYPT"
+    MAGIC = "HAZ.CAT/SSHOVEL"
     VERSION = 1
 
     def encrypt(self, in_file, out_file, ssh, key, encryptor):
