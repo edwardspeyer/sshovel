@@ -322,25 +322,27 @@ class Scrypt(Encryptor):
     Interface to the scrypt(1) command line tool.
     """
 
-    def __init__(self, *options):
-        self.options = options
+    def __init__(self, encrypt_options=[], decrypt_options=[]):
+        self.encrypt_options = encrypt_options
+        self.decrypt_options = decrypt_options
 
     def encrypt(self, in_file, out_file, passphrase):
-        pid, fd = self._fork('enc', in_file, out_file)
+        pid, fd = self._fork('enc', self.encrypt_options, in_file, out_file)
         self._send_passphrase(fd, passphrase)
         self._send_passphrase(fd, passphrase)
         log("waiting for scrypt...")
         os.waitpid(pid, 0)
 
     def decrypt(self, in_file, out_file, passphrase):
-        pid, fd = self._fork('dec', in_file, out_file)
+        pid, fd = self._fork('dec', self.decrypt_options, in_file, out_file)
         self._send_passphrase(fd, passphrase)
         log("waiting for scrypt...")
         os.waitpid(pid, 0)
 
-    def _fork(self, command, in_file, out_file):
+    @staticmethod
+    def _fork(command, options, in_file, out_file):
         args = [command]
-        args.extend(self.options)
+        args.extend(options)
         args.append(in_file)
         args.append(out_file)
         pid, fd = pty.fork()
@@ -409,8 +411,7 @@ class OpenSSLTest(unittest.TestCase):
 
 class ScryptTest(unittest.TestCase):
     def test_encryptor(self):
-        EncryptorTest.assertEncryptor(self, Scrypt('-t', '0.1'))
-
+        assert_encryptor(self, Scrypt(['-t', '0.1'], []))
 
 
 class SSHEncryptor(object):
