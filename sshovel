@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 """
-sshovel - encrypt files with ssh keys and bury your secrets
+sshovel - encrypt files with ssh-agent, bury your secrets.
+
+I should totally talk about this problem and write a sort of summary of it,
+right here!
 
 Todo:
     - Handle agent errors.  agent.sign() may refuse none if we are missing
