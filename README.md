@@ -104,13 +104,17 @@ then you don't have access to the key at all.
 This is more restrictive than sshovel's approach.
 
 
-Acknowledgments
----------------
+Acknowledgments and References
+------------------------------
 
 - [SSH Agent Protocol -- Damien Miller, IETF][IETF]:
   the ssh-agent protocol draft RFC.
 - [ssh-crypt: encrypt secrets with the SSH Agent][sshcrypt]:
   a similar tool to sshovel, written in golang by @leighmcculloch.
+- [Yubico: Using PIV for SSH through PKCS11][Yubico]:
+  how to set up a Yubikey with an ssh key-pair.
+- [Stanford IT: Yubikey PIV for SSH][Stanford]:
+  requiring a physical presence test for the Yubikey ssh key.
 - [Twisted Conch: an SSHv2 implementation written in Python][twisted]:
   a good source of documentation on SSH internals.
 - [Stack Overflow: Creating a rsa public key from its modulus and exponent][SORSA]
@@ -119,6 +123,8 @@ Acknowledgments
 
 [IETF]: https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
 [sshcrypt]: https://github.com/leighmcculloch/sshcrypt
+[Yubico]: https://developers.yubico.com/PIV/Guides/SSH_with_PIV_and_PKCS11.html
+[Stanford]: https://itarch.stanford.edu/archives/2016/general/yubikey-piv-for-ssh-on-macs
 [twisted]: http://twistedmatrix.com/documents/8.2.0/api/twisted.conch.ssh.keys.Key.html#blob
 [SORSA]: https://stackoverflow.com/questions/11541192
 [SOPEM]: https://unix.stackexchange.com/a/358709/233034
