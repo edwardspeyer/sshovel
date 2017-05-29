@@ -270,6 +270,11 @@ class SSHAgentConnectionTest(unittest.TestCase):
 
 
 class Encryptor(object):
+    """
+    Interface / superclass for encryptors, plus some tools for finding
+    subclasses.
+    """
+
     def encrypt(self, in_file, out_file, passphrase):
         pass
 
@@ -402,7 +407,7 @@ class Scrypt(Encryptor):
 class TestFiles(object):
     """
     Some test files, the first of which contains a known message.  Useful when
-    testing encrypt(f1, f2) and decrypt(f2, f3).
+    testing encrypt(f0, f1) and decrypt(f1, f2).
     """
 
     def __init__(self, message):
@@ -437,8 +442,8 @@ class ScryptTest(unittest.TestCase):
 
 class SSHEncryptor(object):
     """
-    Interface to scrypt(1) that uses an ssh-agent(1) to generate the scrypt
-    passphrase.
+    Wrapper around an Encryptor that uses an ssh-agent(1) to generate the
+    encryptor's passphrase.
     """
 
     MAGIC = "HAZ.CAT/SSHOVEL"
