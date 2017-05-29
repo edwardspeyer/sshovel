@@ -331,13 +331,13 @@ class Scrypt(Encryptor):
         self._send_passphrase(fd, passphrase)
         self._send_passphrase(fd, passphrase)
         log("waiting for scrypt...")
-        os.waitpid(pid, 0)
+        self._wait(pid, fd)
 
     def decrypt(self, in_file, out_file, passphrase):
         pid, fd = self._fork('dec', self.decrypt_options, in_file, out_file)
         self._send_passphrase(fd, passphrase)
         log("waiting for scrypt...")
-        os.waitpid(pid, 0)
+        self._wait(pid, fd)
 
     @staticmethod
     def _fork(command, options, in_file, out_file):
@@ -352,22 +352,29 @@ class Scrypt(Encryptor):
         return pid, fd
 
     def _send_passphrase(self, fd, passphrase):
-        self._expect(fd, "passphrase: ", 1)
+        self._expect(fd, 1, "passphrase: ")
         os.write(fd, passphrase)
         os.write(fd, "\n")
         os.fsync(fd)
-        self._expect(fd, "\r\n", 1)
+        self._expect(fd, 1, "\r\n")
 
     @staticmethod
-    def _expect(fd, phrase, timeout):
+    def _read(fd, timeout):
+        return Scrypt._expect(fd, timeout, None)
+
+    @staticmethod
+    def _expect(fd, timeout, phrase):
         start_time = time.time()
         buf = []
         while 1:
             try:
                 byte = os.read(fd, 1)
-                if byte == '':
-                    msg = "EOF after reading: " + ''.join(buf)
-                    raise UserException(msg)
+                if byte == '':  # EOF
+                    if phrase is None:
+                        break
+                    else:
+                        msg = "EOF after reading: " + ''.join(buf)
+                        raise UserException(msg)
                 buf.append(byte)
             except OSError:
                 duration = time.time() - start_time
@@ -375,8 +382,19 @@ class Scrypt(Encryptor):
                     msg = "timed out waiting for '{}'".format(phrase)
                     raise UserException(msg)
                 time.sleep(0.1)
-            if ''.join(buf).endswith(phrase):
-                return
+            if phrase is not None and ''.join(buf).endswith(phrase):
+                break
+        return ''.join(buf)
+
+    @staticmethod
+    def _wait(pid, fd):
+        tail = Scrypt._read(fd, 3)
+        pid, status = os.waitpid(pid, 0)
+        status = status >> 8
+        if status != 0:
+            raise UserException(
+                "command exited with status %d and output '%s'" %
+                (status, tail))
 
 
 class TestFiles(object):
