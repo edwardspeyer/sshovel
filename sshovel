@@ -225,7 +225,9 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
 
     def load_keys(self):
         key_name = 'a_test_ssh_key'
-        key_file = tempfile.NamedTemporaryFile(dir='/tmp', prefix=key_name + '.')
+        key_file = tempfile.NamedTemporaryFile(
+            dir='/tmp',
+            prefix=key_name + '.')
         key_file.write(self.TEST_KEY)
         key_file.flush()
         self._ssh_add(key_file.name)
@@ -278,8 +280,8 @@ class Encryptor(object):
         return Encryptor.name_of(self.__class__)
 
     @staticmethod
-    def name_of(cls):
-        return cls.__name__.lower()
+    def name_of(a_cls):
+        return a_cls.__name__.lower()
 
     @staticmethod
     def all_encryptor_names():
@@ -411,20 +413,21 @@ class TestFiles(object):
         self.f0.flush()
 
 
-class EncryptorTest(object):
-    @staticmethod
-    def assertEncryptor(test, encryptor):
-        message = 'Hello, world!'
-        passphrase = 'PASSPHRASE'
-        files = TestFiles(message)
-        encryptor.encrypt(files.f0.name, files.f1.name, passphrase)
-        encryptor.decrypt(files.f1.name, files.f2.name, passphrase)
-        test.assertEqual(message, files.f2.read(), encryptor.__class__.__name__)
+def assert_encryptor(test, encryptor):
+    message = 'Hello, world!'
+    passphrase = 'PASSPHRASE'
+    files = TestFiles(message)
+    encryptor.encrypt(files.f0.name, files.f1.name, passphrase)
+    encryptor.decrypt(files.f1.name, files.f2.name, passphrase)
+    test.assertEqual(
+        message,
+        files.f2.read(),
+        encryptor.__class__.__name__)
 
 
 class OpenSSLTest(unittest.TestCase):
     def test_encryptor(self):
-        EncryptorTest.assertEncryptor(self, OpenSSL())
+        assert_encryptor(self, OpenSSL())
 
 
 class ScryptTest(unittest.TestCase):
@@ -452,7 +455,10 @@ class SSHEncryptor(object):
             self._write_header(out_io, 'Version', self.VERSION)
             self._write_header(out_io, 'Encryptor', encryptor.name())
             self._write_header(out_io, 'Key', base64.b64encode(key.blob))
-            self._write_header(out_io, 'Comment', base64.b64encode(key.comment))
+            self._write_header(
+                out_io,
+                'Comment',
+                base64.b64encode(key.comment))
             self._write_header(out_io, 'Nonce', nonce)
             out_io.write("\r\n")
             with open(tmp_file, 'r') as tmp_io:
@@ -488,7 +494,7 @@ class SSHEncryptor(object):
         enc_tmp.seek(0)
         log('decrypting with {} and {}'.format(key_comment, encryptor_name))
         signature = ssh.sign(key_blob, nonce)
-        if signature == None:
+        if signature is None:
             raise UserException(
                 "file is encrypted with a key we don't have: {}".format(
                     key_comment))
@@ -571,105 +577,120 @@ class SSHEncryptorTest(unittest.TestCase):
         self.ssh_fixture.stop()
 
 
-def main(args):
-    parser = argparse.ArgumentParser(
-        description='Encrypt files with passphrases derived from ssh keys.')
-    parser.add_argument(
-        '--key',
-        metavar='MATCH',
-        help='use the ssh key whose comment matches MATCH')
-    parser.add_argument(
-        '--with',
-        dest='encryptor',
-        default='scrypt',
-        metavar='TOOL',
-        choices=Encryptor.all_encryptor_names(),
-        help='encrypt with "scrypt" (default) or "openssl"')
-    parser.add_argument(
-        '--test',
-        nargs='*',
-        metavar='ARGS',
-        help='run the test suite')
-    parser.add_argument(
-        'in_file',
-        nargs='?',
-        type=argparse.FileType('r'),
-        default=sys.stdin,
-        metavar='IN',
-        help='a path, or "-" for stdin')
-    parser.add_argument(
-        'out_file',
-        nargs='?',
-        type=argparse.FileType('w'),
-        default=sys.stdout,
-        metavar='OUT',
-        help='a path, or "-" for stdout')
+class Main(object):
+    def __init__(self, args):
+        args = self.parse_args(args)
+        try:
+            self._main(args)
+        except UserException as ex:
+            log(ex.message)
+            sys.exit(1)
 
-    args = parser.parse_args(args)
+    def _main(self, args):
+        if args.test is not None:
+            unittest_args = [__file__]
+            unittest_args.extend(args.test)
+            unittest.main(argv=unittest_args)
 
-    if args.test is not None:
-        unittest_args = [__file__]
-        unittest_args.extend(args.test)
-        unittest.main(argv=unittest_args)
+        encryptor = Encryptor.instance_of(args.encryptor)
+        ssh = self.find_agent()
+        keys = ssh.identities()
+        if not keys:
+            raise UserException("ssh agent has no keys")
 
-    encryptor = Encryptor.instance_of(args.encryptor)
+        key = keys[0]
+        if args.key:
+            key = self.match_key(keys, args.key)
 
-    socket_path = os.environ.get('SSH_AUTH_SOCK')
-    if socket_path == "":
-        parser.error("SSH_AUTH_SOCK is empty or unset")
+        in_file = args.in_file.name
+        in_tmp = None
+        if in_file == '<stdin>':
+            log('reading from stdin')
+            in_tmp = tempfile.NamedTemporaryFile()
+            shutil.copyfileobj(args.in_file, in_tmp)
+            in_tmp.flush()
+            in_file = in_tmp.name
 
-    ssh = SSHAgentConnection(socket_path)
-    keys = ssh.identities()
-    if not keys:
-        parser.error("ssh agent has no keys")
+        out_file = args.out_file.name
+        out_tmp = None
+        if out_file == '<stdout>':
+            out_tmp = tempfile.NamedTemporaryFile()
+            out_file = out_tmp.name
 
-    key = keys[0]
-    if args.key:
+        ssh_encryptor = SSHEncryptor()
+
+        if ssh_encryptor.is_file_encrypted(in_file):
+            ssh_encryptor.decrypt(in_file, out_file, ssh)
+        else:
+            log("encrypting{} with ssh-key '{}' and {}".format(
+                (args.out_file == '-' and ' to stdout' or ''),
+                key.comment,
+                args.encryptor))
+            ssh_encryptor.encrypt(in_file, out_file, ssh, key, encryptor)
+
+        if out_tmp is not None:
+            out_tmp.seek(0)
+            shutil.copyfileobj(out_tmp, sys.stdout)
+            sys.stdout.flush()
+
+    def parse_args(self, args):
+        parser = argparse.ArgumentParser(
+            description=(
+                'Encrypt files with passphrases '
+                'derived from ssh keys.'))
+        parser.add_argument(
+            '--key',
+            metavar='MATCH',
+            help='use the ssh key whose comment matches MATCH')
+        parser.add_argument(
+            '--with',
+            dest='encryptor',
+            default='scrypt',
+            metavar='TOOL',
+            choices=Encryptor.all_encryptor_names(),
+            help='encrypt with "scrypt" (default) or "openssl"')
+        parser.add_argument(
+            '--test',
+            nargs='*',
+            metavar='ARGS',
+            help='run the test suite')
+        parser.add_argument(
+            'in_file',
+            nargs='?',
+            type=argparse.FileType('r'),
+            default=sys.stdin,
+            metavar='IN',
+            help='a path, or "-" for stdin')
+        parser.add_argument(
+            'out_file',
+            nargs='?',
+            type=argparse.FileType('w'),
+            default=sys.stdout,
+            metavar='OUT',
+            help='a path, or "-" for stdout')
+        return parser.parse_args(args)
+
+    def find_agent(self):
+        socket_path = os.environ.get('SSH_AUTH_SOCK')
+        if socket_path == "":
+            raise UserException("SSH_AUTH_SOCK is empty or unset")
+        return SSHAgentConnection(socket_path)
+
+    def match_key(self, keys, pattern):
         matches = []
         for candidate in keys:
-            if args.key in candidate.comment:
+            if pattern in candidate.comment:
                 matches.append(candidate)
-        if not matches:
-            parser.error(
+        if len(matches) == 1:
+            return matches[0]
+        elif not matches:
+            raise UserException(
                 "no ssh key matched '{}'; known keys: {}"
-                .format(args.key, [k.comment for k in keys]))
-        elif len(matches) == 1:
-            key = matches[0]
-        else:
-            parser.error(
+                .format(pattern, [k.comment for k in keys]))
+        elif len(matches) > 2:
+            raise UserException(
                 "more than one key matched '{}': {}"
-                .format(args.key, [k.comment for k in matches]))
-
-    in_file = args.in_file.name
-    in_tmp = None
-    if in_file == '<stdin>':
-        log('reading from stdin')
-        in_tmp = tempfile.NamedTemporaryFile()
-        shutil.copyfileobj(args.in_file, in_tmp)
-        in_tmp.flush()
-        in_file = in_tmp.name
-
-    out_file = args.out_file.name
-    out_tmp = None
-    if out_file == '<stdout>':
-        out_tmp = tempfile.NamedTemporaryFile()
-        out_file = out_tmp.name
-
-    ssh_encryptor = SSHEncryptor()
-
-    if ssh_encryptor.is_file_encrypted(in_file):
-        ssh_encryptor.decrypt(in_file, out_file, ssh)
-    else:
-        log("encrypting{} with ssh-key '{}' and {}".format(
-            (args.out_file == '-' and ' to stdout' or ''),
-            key.comment,
-            args.encryptor))
-        ssh_encryptor.encrypt(in_file, out_file, ssh, key, encryptor)
-
-    if out_tmp is not None:
-        out_tmp.seek(0)
-        shutil.copyfileobj(out_tmp, sys.stdout)
-        sys.stdout.flush()
+                .format(pattern, [k.comment for k in matches]))
 
 
 class MainTest(unittest.TestCase):
@@ -681,16 +702,12 @@ class MainTest(unittest.TestCase):
         os.environ['SSH_AUTH_SOCK'] = self.ssh_fixture.socket_path
 
     def test_encrypt(self):
-        main(['--with', 'openssl', self.files.f0.name, self.files.f1.name])
-        main([self.files.f1.name, self.files.f2.name])
+        Main(['--with', 'openssl', self.files.f0.name, self.files.f1.name])
+        Main([self.files.f1.name, self.files.f2.name])
         self.assertEqual(self.message, self.files.f2.read())
 
     def tearDown(self):
         self.ssh_fixture.stop()
 
 
-try:
-    main(sys.argv[1:])
-except UserException as ex:
-    log(ex.message)
-    sys.exit(1)
+Main(sys.argv[1:])
