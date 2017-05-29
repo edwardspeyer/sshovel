@@ -322,6 +322,9 @@ class Scrypt(Encryptor):
     Interface to the scrypt(1) command line tool.
     """
 
+    def __init__(self, *options):
+        self.options = options
+
     def encrypt(self, in_file, out_file, passphrase):
         pid, fd = self._fork('enc', in_file, out_file)
         self._send_passphrase(fd, passphrase)
@@ -335,11 +338,14 @@ class Scrypt(Encryptor):
         log("waiting for scrypt...")
         os.waitpid(pid, 0)
 
-    @staticmethod
-    def _fork(command, in_file, out_file):
+    def _fork(self, command, in_file, out_file):
+        args = [command]
+        args.extend(self.options)
+        args.append(in_file)
+        args.append(out_file)
         pid, fd = pty.fork()
         if pid == 0:
-            os.execlp('scrypt', 'scrypt', command, in_file, out_file)
+            os.execlp('scrypt', 'scrypt', *args)
         fcntl.fcntl(fd, fcntl.F_SETFL, os.O_NONBLOCK)
         return pid, fd
 
@@ -387,24 +393,23 @@ class TestFiles(object):
 
 class EncryptorTest(object):
     @staticmethod
-    def assertEncryptor(test, cls):
+    def assertEncryptor(test, encryptor):
         message = 'Hello, world!'
         passphrase = 'PASSPHRASE'
         files = TestFiles(message)
-        encryptor = cls()
         encryptor.encrypt(files.f0.name, files.f1.name, passphrase)
         encryptor.decrypt(files.f1.name, files.f2.name, passphrase)
-        test.assertEqual(message, files.f2.read(), cls.__name__)
+        test.assertEqual(message, files.f2.read(), encryptor.__class__.__name__)
 
 
 class OpenSSLTest(unittest.TestCase):
     def test_encryptor(self):
-        EncryptorTest.assertEncryptor(self, OpenSSL)
+        EncryptorTest.assertEncryptor(self, OpenSSL())
 
 
 class ScryptTest(unittest.TestCase):
     def test_encryptor(self):
-        EncryptorTest.assertEncryptor(self, Scrypt)
+        EncryptorTest.assertEncryptor(self, Scrypt('-t', '0.1'))
 
 
 
