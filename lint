@@ -1,10 +1,9 @@
 #!/bin/sh
 
-pep8 ssh-crypt
+pep8 sshovel
 
-pylint -f parseable ssh-crypt \
+pylint -f parseable sshovel \
   | egrep -v missing-docstring                          \
-  | egrep -v 'Invalid module name "ssh-crypt"'          \
   | egrep -v 'Invalid (variable|argument) name "fd"'    \
   | egrep -v 'Invalid attribute name "f[012]"'          \
   | egrep -v 'TestFiles\] Too few public methods'       \
