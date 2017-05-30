@@ -258,84 +258,106 @@ class OpenSSL(Encryptor):
             os.close(pr)
 
 
+class Expect(object):
+    def __init__(self, command):
+        self.command = command
+        self._start()
+
+    def expect(self, phrase, timeout):
+        buf = ''
+        read_fn = lambda size: os.read(self.tty, size)
+        for block in self._read(read_fn, timeout):
+            buf += block
+            if phrase in buf:
+                return True
+        raise Exception("EOF")
+
+    def send(self, data, timeout):
+        os.write(self.tty, data)
+
+    def copy(self, reader, writer, timeout):
+        for block in self._read(reader.read, timeout):
+            writer.write(block)
+
+    def finish(self):
+        os.close(self.tty)
+        self.stdout.close()
+        return os.waitpid(self.pid, 0)
+
+    def _start(self):
+        stdin_reader, stdin_writer = os.pipe()
+        stdout_reader, stdout_writer = os.pipe()
+
+        pid, tty = pty.fork()
+        if not pid:
+            os.close(stdin_writer)
+            os.close(stdout_reader)
+            os.dup2(stdin_reader, 0)
+            os.dup2(stdout_writer, 1)
+            os.execvp(self.command[0], self.command)
+
+        self._set_non_blocking(tty)
+        self._set_non_blocking(stdout_reader)
+
+        os.close(stdin_reader)
+        os.close(stdout_writer)
+
+        self.tty = tty
+        self.pid = pid
+        self.stdin = os.fdopen(stdin_writer, 'w')
+        self.stdout = os.fdopen(stdout_reader, 'r')
+
+    @staticmethod
+    def _set_non_blocking(fd):
+        fcntl.fcntl(fd, fcntl.F_SETFL, os.O_NONBLOCK)
+
+    @staticmethod
+    def _read(read_fn, timeout):
+        start_time = time.time()
+        while True:
+            duration = time.time() - start_time
+            if duration > timeout:
+                raise Exception("timed out")
+            block = None
+            try:
+                block = read_fn(1024)
+                if block == '':
+                    break
+            except (IOError, OSError):
+                time.sleep(0.1)
+                continue
+            yield block
+
+
 class Scrypt(Encryptor):
     """
     Interface to the scrypt(1) command line tool.
     """
 
-    def __init__(self, encrypt_options=[], decrypt_options=[]):
+    def __init__(self, encrypt_options=[]):
         self.encrypt_options = encrypt_options
-        self.decrypt_options = decrypt_options
 
-    def encrypt(self, in_file, out_file, passphrase):
-        pid, fd = self._fork('enc', self.encrypt_options, in_file, out_file)
-        self._send_passphrase(fd, passphrase)
-        self._send_passphrase(fd, passphrase)
-        log("waiting for scrypt...")
-        self._wait(pid, fd)
+    def encrypt(self, reader, writer, passphrase):
+        command = ['scrypt', 'enc']
+        command.extend(self.encrypt_options)
+        command.append('-')
+        self.scrypt(command, reader, writer, passphrase, True)
 
-    def decrypt(self, in_file, out_file, passphrase):
-        pid, fd = self._fork('dec', self.decrypt_options, in_file, out_file)
-        self._send_passphrase(fd, passphrase)
-        log("waiting for scrypt...")
-        self._wait(pid, fd)
+    def decrypt(self, reader, writer, passphrase):
+        command = ['scrypt', 'dec', '-']
+        self.scrypt(command, reader, writer, passphrase, False)
 
-    @staticmethod
-    def _fork(command, options, in_file, out_file):
-        args = [command]
-        args.extend(options)
-        args.append(in_file)
-        args.append(out_file)
-        pid, fd = pty.fork()
-        if pid == 0:
-            os.execlp('scrypt', 'scrypt', *args)
-        fcntl.fcntl(fd, fcntl.F_SETFL, os.O_NONBLOCK)
-        return pid, fd
-
-    def _send_passphrase(self, fd, passphrase):
-        self._expect(fd, 1, "passphrase: ")
-        os.write(fd, passphrase)
-        os.write(fd, "\n")
-        os.fsync(fd)
-        self._expect(fd, 1, "\r\n")
-
-    @staticmethod
-    def _read(fd, timeout):
-        return Scrypt._expect(fd, timeout, None)
-
-    @staticmethod
-    def _expect(fd, timeout, phrase):
-        start_time = time.time()
-        buf = []
-        while 1:
-            try:
-                byte = os.read(fd, 1)
-                if byte == '':  # EOF
-                    if phrase is None:
-                        break
-                    else:
-                        msg = "EOF after reading: " + ''.join(buf)
-                        raise UserException(msg)
-                buf.append(byte)
-            except OSError:
-                duration = time.time() - start_time
-                if duration > timeout:
-                    msg = "timed out waiting for '{}'".format(phrase)
-                    raise UserException(msg)
-                time.sleep(0.1)
-            if phrase is not None and ''.join(buf).endswith(phrase):
-                break
-        return ''.join(buf)
-
-    @staticmethod
-    def _wait(pid, fd):
-        tail = Scrypt._read(fd, 3)
-        pid, status = os.waitpid(pid, 0)
-        status = status >> 8
-        if status != 0:
-            raise UserException(
-                "command exited with status %d and output '%s'" %
-                (status, tail))
+    def scrypt(self, command, reader, writer, passphrase, is_encrypt):
+        e = Expect(command)
+        e.expect('passphrase: ', 1)
+        e.send(passphrase + "\n", 1)
+        if is_encrypt:
+            e.expect('passphrase: ', 1)
+            e.send(passphrase + "\n", 1)
+        e.copy(reader, e.stdin, 10)
+        e.stdin.close()
+        e.copy(e.stdout, writer, 10)
+        e.finish()
 
 
 class SSHEncryptor(object):
