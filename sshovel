@@ -365,14 +365,12 @@ class ShovelFile(object):
 
     MAGIC = "HAZ.CAT/SSHOVEL"
     VERSION = 1
-
     @classmethod
     def is_shovel_file(cls, reader):
         expected_magic = cls._header('Magic', cls.MAGIC)
         length = len(expected_magic)
         actual_magic = reader.peek(len(expected_magic))[0:length]
         return actual_magic == expected_magic
-
 
     @classmethod
     def encrypt(cls, reader, ssh, key, cipher):
@@ -446,19 +444,6 @@ class ShovelFile(object):
         return '{}: {}\r\n'.format(key, value)
 
 
-class ShovelCipher(Cipher):
-    def encrypt(self, reader, writer, passphrase=None):
-        ssh = self.options.get('ssh')
-        key = self.options.get('key')
-        cipher = self.options.get('cipher')
-        ShovelFile.encrypt(reader, ssh, key, cipher).save_to(writer)
-
-    def decrypt(self, reader, writer, passphrase=None):
-        ssh = self.options.get('ssh')
-        f = ShovelFile.load_from(reader)
-        f.decrypt(writer, ssh)
-
-
 class Main(object):
     def __init__(self, args):
         args = self.parse_args(args)
@@ -484,8 +469,6 @@ class Main(object):
         if args.key:
             key = self.match_key(keys, args.key)
 
-        cipher = ShovelCipher(ssh=ssh, key=key, cipher=cipher)
-
         if args.in_file == '-':
             args.in_file = '/dev/stdin'
 
@@ -500,13 +483,13 @@ class Main(object):
             log("reading from stdin")
 
         if ShovelFile.is_shovel_file(reader):
-            cipher.decrypt(reader, writer, None)
+            ShovelFile.load_from(reader).decrypt(writer, ssh)
         else:
             log("encrypting{} with ssh-key '{}' and {}".format(
                 (writer == sys.stdout and ' to stdout' or ''),
                 key.comment,
                 args.cipher))
-            cipher.encrypt(reader, writer, None)
+            ShovelFile.encrypt(reader, ssh, key, cipher).save_to(writer)
 
     def parse_args(self, args):
         epilogue = u"""\
@@ -737,28 +720,36 @@ class ScryptCipherTest(CipherTest):
         self.assertDecrypt(cipher, ciphertext, passphrase)
 
 
-class ShovelCipherTest(CipherTest):
+class ShovelFileTest(CipherTest):
     def setUp(self):
         self.fixture = SSHTestFixture()
-        self.ssh = SSHAgentConnection(self.fixture.socket_path)
 
     def tearDown(self):
         self.fixture.stop()
 
     def test_cipher(self):
-        key = self.ssh.identities()[0]
-        cipher = ShovelCipher(ssh=self.ssh, key=key, cipher=OpenSSLCipher())
-        ciphertext = self.assertEncrypt(cipher, 'LOL')
-        self.assertDecrypt(cipher, ciphertext, 'FOO')
+        ssh = SSHAgentConnection(self.fixture.socket_path)
+        key = ssh.identities()[0]
+        message = "Hello, world!!!!1"
+        cipher = OpenSSLCipher()
+        src = io.BytesIO(message)
+        dst = io.BytesIO()
+        ShovelFile.encrypt(src, ssh, key, cipher).decrypt(dst, ssh)
+        dst.seek(0)
+        self.assertEqual(message, dst.read())
 
     def test_missing_keys(self):
-        key = self.ssh.identities()[0]
-        cipher = ShovelCipher(ssh=self.ssh, key=key, cipher=OpenSSLCipher())
-        ciphertext = self.assertEncrypt(cipher, 'LOL')
+        ssh = SSHAgentConnection(self.fixture.socket_path)
+        key = ssh.identities()[0]
+        message = "Hello, world!!!!1"
+        cipher = OpenSSLCipher()
+        src = io.BytesIO(message)
+        dst = io.BytesIO()
+        shovel_file = ShovelFile.encrypt(src, ssh, key, cipher)
         self.fixture.delete_keys()
         ex = None
         try:
-            self.assertDecrypt(cipher, ciphertext, 'FOO')
+            shovel_file.decrypt(dst, ssh)
         except UserException as ex:
             pass
         self.assertIsNotNone(ex)
