@@ -198,10 +198,13 @@ class Encryptor(object):
     subclasses.
     """
 
-    def encrypt(self, in_file, out_file, passphrase):
+    def __init__(self, **options):
+        self.options = options
+
+    def encrypt(self, reader, writer, passphrase):
         pass
 
-    def decrypt(self, in_file, out_file, passphrase):
+    def decrypt(self, reader, writer, passphrase):
         pass
 
     def name(self):
@@ -692,13 +695,17 @@ class TestFiles(object):
 def assert_encryptor(test, encryptor):
     message = 'Hello, world!'
     passphrase = 'PASSPHRASE'
-    files = TestFiles(message)
-    encryptor.encrypt(files.f0.name, files.f1.name, passphrase)
-    encryptor.decrypt(files.f1.name, files.f2.name, passphrase)
-    test.assertEqual(
-        message,
-        files.f2.read(),
-        encryptor.__class__.__name__)
+    reader = StringIO.StringIO(message)
+    writer = StringIO.StringIO()
+    encryptor.encrypt(reader, writer, passphrase)
+    writer.seek(0)
+    ciphertext = writer.read()
+    reader = StringIO.StringIO(ciphertext)
+    writer = StringIO.StringIO()
+    encryptor.decrypt(reader, writer, passphrase)
+    writer.seek(0)
+    plaintext = writer.read()
+    test.assertEqual(message, plaintext, encryptor.__class__.__name__)
 
 
 class OpenSSLTest(unittest.TestCase):
