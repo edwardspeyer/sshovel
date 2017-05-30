@@ -43,6 +43,7 @@ TODO:
 - Test with other types of ssh key.
 - Test with multiple ssh keys.
 - Get rid of double StringIO.StringIOs :P
+- Encryptor isn't a great name given that it decrypts as well -- "Cryptor"?
 
 """
 
