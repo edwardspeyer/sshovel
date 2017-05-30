@@ -38,7 +38,8 @@ TODO:
 - SSH sign flags: 512?  What does open ssh do?  Only for rsa keys.
 - Harden OpenSSL parameters?
 - Prefer tools that write to stdout?
-- Write temporary files alongside output file?  Or just don't use temporary files.
+- Write temporary files alongside output file?  Or just don't use temporary
+  files.
 - Handle ^C
 - Test with other types of ssh key.
 - Test with multiple ssh keys.
@@ -49,7 +50,6 @@ TODO:
 from collections import namedtuple
 import StringIO
 import argparse
-import atexit
 import base64
 import fcntl
 import hashlib
@@ -237,14 +237,14 @@ class OpenSSLCipher(Cipher):
 
     @staticmethod
     def _openssl(command, reader, writer, passphrase):
-        pr, pw = os.pipe()
-        os.write(pw, passphrase)
-        os.close(pw)
+        password_read, password_write = os.pipe()
+        os.write(password_write, passphrase)
+        os.close(password_write)
         command = [
             'openssl', 'aes-256-cbc',
             command,
             '-a', '-salt',
-            '-kfile', '/dev/fd/%d' % pr]
+            '-kfile', '/dev/fd/%d' % password_read]
         try:
             openssl = subprocess.Popen(
                 command,
@@ -255,7 +255,7 @@ class OpenSSLCipher(Cipher):
             shutil.copyfileobj(openssl.stdout, writer)
             openssl.wait()
         finally:
-            os.close(pr)
+            os.close(password_read)
 
 
 class Expect(object):
@@ -265,14 +265,16 @@ class Expect(object):
 
     def expect(self, phrase, timeout):
         buf = ''
-        read_fn = lambda size: os.read(self.tty, size)
-        for block in self._read(read_fn, timeout):
+        for block in self._read(self.tty_read, timeout):
             buf += block
             if phrase in buf:
                 return True
         raise Exception("EOF")
 
-    def send(self, data, timeout):
+    def tty_read(self, size):
+        return os.read(self.tty, size)
+
+    def send(self, data):
         os.write(self.tty, data)
 
     def copy(self, reader, writer, timeout):
@@ -308,8 +310,8 @@ class Expect(object):
         self.stdout = os.fdopen(stdout_reader, 'r')
 
     @staticmethod
-    def _set_non_blocking(fd):
-        fcntl.fcntl(fd, fcntl.F_SETFL, os.O_NONBLOCK)
+    def _set_non_blocking(file_descriptor):
+        fcntl.fcntl(file_descriptor, fcntl.F_SETFL, os.O_NONBLOCK)
 
     @staticmethod
     def _read(read_fn, timeout):
@@ -338,23 +340,22 @@ class ScryptCipher(Cipher):
         command = ['scrypt', 'enc']
         command.extend(self.options.get('encrypt_options'))
         command.append('-')
-        self.scrypt(command, reader, writer, passphrase, True)
+        self.scrypt(command, reader, writer, passphrase, passphrase)
 
     def decrypt(self, reader, writer, passphrase):
         command = ['scrypt', 'dec', '-']
-        self.scrypt(command, reader, writer, passphrase, False)
+        self.scrypt(command, reader, writer, passphrase)
 
-    def scrypt(self, command, reader, writer, passphrase, is_encrypt):
-        e = Expect(command)
-        e.expect('passphrase: ', 1)
-        e.send(passphrase + "\n", 1)
-        if is_encrypt:
-            e.expect('passphrase: ', 1)
-            e.send(passphrase + "\n", 1)
-        e.copy(reader, e.stdin, 10)
-        e.stdin.close()
-        e.copy(e.stdout, writer, 10)
-        e.finish()
+    @staticmethod
+    def scrypt(command, reader, writer, *passphrases):
+        exp = Expect(command)
+        for passphrase in passphrases:
+            exp.expect('passphrase: ', 1)
+            exp.send(passphrase + "\n")
+        exp.copy(reader, exp.stdin, 10)
+        exp.stdin.close()
+        exp.copy(exp.stdout, writer, 10)
+        exp.finish()
 
 
 class ShovelFile(object):
@@ -365,6 +366,7 @@ class ShovelFile(object):
 
     MAGIC = "HAZ.CAT/SSHOVEL"
     VERSION = 1
+
     @classmethod
     def is_shovel_file(cls, reader):
         expected_magic = cls._header('Magic', cls.MAGIC)
@@ -384,8 +386,8 @@ class ShovelFile(object):
 
     @classmethod
     def load_from(cls, reader):
-        magic = cls._read_header(reader, 'Magic')
-        version = cls._read_header(reader, 'Version')
+        _ = cls._read_header(reader, 'Magic')
+        _ = cls._read_header(reader, 'Version')
         cipher_name = cls._read_header(reader, 'Cipher')
         key_blob = cls._read_header_base64(reader, 'Key')
         comment = cls._read_header_base64(reader, 'Comment')
@@ -407,13 +409,16 @@ class ShovelFile(object):
         writer.write(self._header('Version', self.VERSION))
         writer.write(self._header('Cipher', self.cipher.name()))
         writer.write(self._header('Key', base64.b64encode(self.key.blob)))
-        writer.write(self._header('Comment', base64.b64encode(self.key.comment)))
+        writer.write(
+            self._header('Comment', base64.b64encode(self.key.comment)))
         writer.write(self._header('Nonce', self.nonce))
         writer.write("\r\n")
         base64.encode(self.encrypted_file, writer)
 
     def decrypt(self, writer, ssh):
-        log('decrypting with {} and {}'.format(self.key.comment, self.cipher.name()))
+        log('decrypting with {} and {}'.format(
+            self.key.comment,
+            self.cipher.name()))
         signature = ssh.sign(self.key.blob, self.nonce)
         if signature is None:
             raise UserException(
@@ -425,8 +430,8 @@ class ShovelFile(object):
         self.cipher.decrypt(reader, writer, passphrase)
 
     @staticmethod
-    def _read_header(f, key):
-        line = f.readline().rstrip()
+    def _read_header(reader, key):
+        line = reader.readline().rstrip()
         actual_key, value = line.split(': ')
         if actual_key != key:
             raise UserException(
@@ -435,9 +440,9 @@ class ShovelFile(object):
         return value
 
     @classmethod
-    def _read_header_base64(cls, f, key):
-        v = cls._read_header(f, key)
-        return base64.b64decode(v)
+    def _read_header_base64(cls, reader, key):
+        value = cls._read_header(reader, key)
+        return base64.b64decode(value)
 
     @staticmethod
     def _header(key, value):
@@ -491,7 +496,8 @@ class Main(object):
                 args.cipher))
             ShovelFile.encrypt(reader, ssh, key, cipher).save_to(writer)
 
-    def parse_args(self, args):
+    @staticmethod
+    def parse_args(args):
         epilogue = u"""\
 examples:
 
@@ -546,13 +552,15 @@ examples:
             help='as above, with stdout as the default')
         return parser.parse_args(args)
 
-    def find_agent(self):
+    @staticmethod
+    def find_agent():
         socket_path = os.environ.get('SSH_AUTH_SOCK')
         if socket_path == "":
             raise UserException("SSH_AUTH_SOCK is empty or unset")
         return SSHAgentConnection(socket_path)
 
-    def match_key(self, keys, pattern):
+    @staticmethod
+    def match_key(keys, pattern):
         matches = []
         for candidate in keys:
             if pattern in candidate.comment:
@@ -577,15 +585,15 @@ class MainTest(unittest.TestCase):
         os.environ['SSH_AUTH_SOCK'] = self.ssh_fixture.socket_path
 
     def test_encrypt(self):
-        f0 = tempfile.NamedTemporaryFile()
-        f0.write(self.message)
-        f0.flush()
-        f1 = tempfile.NamedTemporaryFile()
-        f2 = tempfile.NamedTemporaryFile()
-        Main(['--cipher', 'openssl', f0.name, f1.name])
-        Main([f1.name, f2.name])
-        f2.seek(0)
-        actual = f2.read()
+        file0 = tempfile.NamedTemporaryFile()
+        file0.write(self.message)
+        file0.flush()
+        file1 = tempfile.NamedTemporaryFile()
+        file2 = tempfile.NamedTemporaryFile()
+        Main(['--cipher', 'openssl', file0.name, file1.name])
+        Main([file1.name, file2.name])
+        file2.seek(0)
+        actual = file2.read()
         self.assertEqual(self.message, actual)
 
     def tearDown(self):
@@ -687,7 +695,7 @@ class SSHAgentConnectionTest(unittest.TestCase):
 class CipherTest(unittest.TestCase):
     message = 'Hello, world!'
 
-    def assertEncrypt(self, cipher, passphrase):
+    def assert_encrypt(self, cipher, passphrase):
         reader = StringIO.StringIO(self.message)
         writer = StringIO.StringIO()
         cipher.encrypt(reader, writer, passphrase)
@@ -695,7 +703,7 @@ class CipherTest(unittest.TestCase):
         ciphertext = writer.read()
         return ciphertext
 
-    def assertDecrypt(self, cipher, ciphertext, passphrase):
+    def assert_decrypt(self, cipher, ciphertext, passphrase):
         reader = StringIO.StringIO(ciphertext)
         writer = StringIO.StringIO()
         cipher.decrypt(reader, writer, passphrase)
@@ -708,16 +716,16 @@ class OpenSSLCipherTest(CipherTest):
     def test_cipher(self):
         cipher = OpenSSLCipher()
         passphrase = 'PASSPHRASE'
-        ciphertext = self.assertEncrypt(cipher, passphrase)
-        self.assertDecrypt(cipher, ciphertext, passphrase)
+        ciphertext = self.assert_encrypt(cipher, passphrase)
+        self.assert_decrypt(cipher, ciphertext, passphrase)
 
 
 class ScryptCipherTest(CipherTest):
     def test_cipher(self):
         cipher = ScryptCipher(encrypt_options=['-t', '0.1'])
         passphrase = 'PASSPHRASE'
-        ciphertext = self.assertEncrypt(cipher, passphrase)
-        self.assertDecrypt(cipher, ciphertext, passphrase)
+        ciphertext = self.assert_encrypt(cipher, passphrase)
+        self.assert_decrypt(cipher, ciphertext, passphrase)
 
 
 class ShovelFileTest(CipherTest):
