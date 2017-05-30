@@ -154,7 +154,11 @@ class SSHAgentConnection(object):
 
     def __init__(self, socket_path):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
-        sock.connect(socket_path)
+        try:
+            sock.connect(socket_path)
+        except IOError as ex:
+            raise UserException(
+                "can't connect to ssh-agent socket %s: %s" % (socket_path, ex))
         self.packer = Packer.from_socket(sock)
 
     def identities(self):
