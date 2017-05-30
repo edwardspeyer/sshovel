@@ -54,6 +54,7 @@ import atexit
 import base64
 import fcntl
 import hashlib
+import io
 import os
 import os.path
 import pty
@@ -360,7 +361,7 @@ class Scrypt(Encryptor):
         e.finish()
 
 
-class SSHEncryptor(object):
+class ShovelFile(object):
     """
     Wrapper around an Encryptor that uses an ssh-agent(1) to generate the
     encryptor's passphrase.
@@ -369,74 +370,68 @@ class SSHEncryptor(object):
     MAGIC = "HAZ.CAT/SSHOVEL"
     VERSION = 1
 
-    def encrypt(self, in_file, out_file, ssh, key, encryptor):
+    @classmethod
+    def is_shovel_file(cls, reader):
+        expected_magic = cls._header('Magic', cls.MAGIC)
+        length = len(expected_magic)
+        actual_magic = reader.peek(len(expected_magic))[0:length]
+        return actual_magic == expected_magic
+
+
+    @classmethod
+    def encrypt(cls, reader, ssh, key, encryptor):
         nonce = hashlib.sha1(os.urandom(64)).hexdigest()
         signature = ssh.sign(key.blob, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
-        tmp_file = self.tmp_for(out_file)
-        encryptor.encrypt(in_file, tmp_file, passphrase)
-        with open(out_file, 'w') as out_io:
-            out_io.write(self._begin_line())
-            self._write_header(out_io, 'Version', self.VERSION)
-            self._write_header(out_io, 'Encryptor', encryptor.name())
-            self._write_header(out_io, 'Key', base64.b64encode(key.blob))
-            self._write_header(
-                out_io,
-                'Comment',
-                base64.b64encode(key.comment))
-            self._write_header(out_io, 'Nonce', nonce)
-            out_io.write("\r\n")
-            with open(tmp_file, 'r') as tmp_io:
-                base64.encode(tmp_io, out_io)
-            out_io.write("-----END {}-----\r\n".format(self.MAGIC))
+        tmp = tempfile.NamedTemporaryFile()
+        encryptor.encrypt(reader, tmp, passphrase)
+        tmp.seek(0)
+        return cls(encryptor, key, nonce, tmp)
 
-    def decrypt(self, in_file, out_file, ssh):
-        b64_tmp = tempfile.NamedTemporaryFile()
-        key_blob = None
-        key_comment = None
-        nonce = None
-        encryptor_name = None
-        with open(in_file, 'r') as in_io:
-            if not self._read_magic(in_io):
-                raise UserException(
-                    "unrecognized format; did not find magic number '{}'"
-                    .format(self.MAGIC))
-            version = self._read_header(in_io, 'Version')
-            encryptor_name = self._read_header(in_io, 'Encryptor')
-            key_blob = base64.b64decode(self._read_header(in_io, 'Key'))
-            key_comment = base64.b64decode(self._read_header(in_io, 'Comment'))
-            nonce = self._read_header(in_io, 'Nonce')
-            for line in in_io:
-                # Ignore the ----END line:
-                if line[0] == '-':
-                    break
-                b64_tmp.write(line.rstrip())
-        b64_tmp.flush()
-        b64_tmp.seek(0)
-        enc_tmp = tempfile.NamedTemporaryFile()
-        base64.decode(b64_tmp, enc_tmp)
-        enc_tmp.flush()
-        enc_tmp.seek(0)
-        log('decrypting with {} and {}'.format(key_comment, encryptor_name))
-        signature = ssh.sign(key_blob, nonce)
+    @classmethod
+    def load_from(cls, reader):
+        magic = cls._read_header(reader, 'Magic')
+        version = cls._read_header(reader, 'Version')
+        encryptor_name = cls._read_header(reader, 'Encryptor')
+        key_blob = cls._read_header_base64(reader, 'Key')
+        comment = cls._read_header_base64(reader, 'Comment')
+        nonce = cls._read_header(reader, 'Nonce')
+        key = SSHAgentConnection.Key(key_blob, comment)
+        encryptor = Encryptor.instance_of(encryptor_name)
+        encrypted_file = tempfile.NamedTemporaryFile()
+        base64.decode(reader, encrypted_file)
+        return cls(encryptor, key, nonce, encrypted_file)
+
+    def __init__(self, encryptor, key, nonce, encrypted_file):
+        self.encryptor = encryptor
+        self.key = key
+        self.nonce = nonce
+        self.encrypted_file = encrypted_file
+
+    def save_to(self, writer):
+        writer.write(self._header('Magic', self.MAGIC))
+        writer.write(self._header('Version', self.VERSION))
+        writer.write(self._header('Encryptor', self.encryptor.name()))
+        writer.write(self._header('Key', base64.b64encode(self.key.blob)))
+        writer.write(self._header('Comment', base64.b64encode(self.key.comment)))
+        writer.write(self._header('Nonce', self.nonce))
+        writer.write("\r\n")
+        base64.encode(self.encrypted_file, writer)
+
+    def decrypt(self, writer, ssh):
+        log('decrypting with {} and {}'.format(self.key.comment, self.encryptor.name()))
+        signature = ssh.sign(self.key.blob, self.nonce)
         if signature is None:
             raise UserException(
                 "file is encrypted with a key we don't have: {}".format(
-                    key_comment))
+                    self.key.comment))
         passphrase = hashlib.sha1(signature).hexdigest()
-        encryptor = Encryptor.instance_of(encryptor_name)
-        encryptor.decrypt(enc_tmp.name, out_file, passphrase)
+        reader = self.encrypted_file
+        reader.seek(0)
+        self.encryptor.decrypt(reader, writer, passphrase)
 
-    def is_file_encrypted(self, in_file):
-        with open(in_file, 'r') as f:
-            return self._read_magic(f)
-
-    def _read_magic(self, f):
-        expected = self._begin_line()
-        actual = f.read(len(expected))
-        return actual == expected
-
-    def _read_header(self, f, key):
+    @staticmethod
+    def _read_header(f, key):
         line = f.readline().rstrip()
         actual_key, value = line.split(': ')
         if actual_key != key:
@@ -445,22 +440,27 @@ class SSHEncryptor(object):
                 .format(key, line))
         return value
 
-    def _write_header(self, f, key, value):
-        f.write('{}: {}\r\n'.format(key, value))
+    @classmethod
+    def _read_header_base64(cls, f, key):
+        v = cls._read_header(f, key)
+        return base64.b64decode(v)
 
     @staticmethod
-    def tmp_for(path):
-        basename = os.path.basename(path)
-        fd, tmp_file = tempfile.mkstemp(prefix='.'+basename)
-        os.close(fd)
-        atexit.register(lambda: os.remove(tmp_file))
-        return tmp_file
+    def _header(key, value):
+        return '{}: {}\r\n'.format(key, value)
 
-    def _begin_line(self):
-        return '-----BEGIN {}-----\r\n'.format(self.MAGIC)
 
-    def _end_line(self):
-        return '-----END {}-----\r\n'.format(self.MAGIC)
+class ShovelEncryptor(Encryptor):
+    def encrypt(self, reader, writer, passphrase=None):
+        ssh = self.options.get('ssh')
+        key = self.options.get('key')
+        encryptor = self.options.get('encryptor')
+        ShovelFile.encrypt(reader, ssh, key, encryptor).save_to(writer)
+
+    def decrypt(self, reader, writer, passphrase=None):
+        ssh = self.options.get('ssh')
+        f = ShovelFile.load_from(reader)
+        f.decrypt(writer, ssh)
 
 
 class Main(object):
@@ -488,36 +488,29 @@ class Main(object):
         if args.key:
             key = self.match_key(keys, args.key)
 
-        in_file = args.in_file.name
-        in_tmp = None
-        if in_file == '<stdin>':
-            log('reading from stdin')
-            in_tmp = tempfile.NamedTemporaryFile()
-            shutil.copyfileobj(args.in_file, in_tmp)
-            in_tmp.flush()
-            in_file = in_tmp.name
+        encryptor = ShovelEncryptor(ssh=ssh, key=key, encryptor=encryptor)
 
-        out_file = args.out_file.name
-        out_tmp = None
-        if out_file == '<stdout>':
-            out_tmp = tempfile.NamedTemporaryFile()
-            out_file = out_tmp.name
+        if args.in_file == '-':
+            args.in_file = '/dev/stdin'
 
-        ssh_encryptor = SSHEncryptor()
+        if args.out_file == '-':
+            args.out_file = '/dev/stdout'
 
-        if ssh_encryptor.is_file_encrypted(in_file):
-            ssh_encryptor.decrypt(in_file, out_file, ssh)
+        # io.open's buffering gives us peek()
+        reader = io.open(args.in_file, mode='rb', buffering=1024)
+        writer = open(args.out_file, mode='wb')
+
+        if args.in_file == '/dev/stdin':
+            log("reading from stdin")
+
+        if ShovelFile.is_shovel_file(reader):
+            encryptor.decrypt(reader, writer, None)
         else:
             log("encrypting{} with ssh-key '{}' and {}".format(
-                (args.out_file == '-' and ' to stdout' or ''),
+                (writer == sys.stdout and ' to stdout' or ''),
                 key.comment,
                 args.encryptor))
-            ssh_encryptor.encrypt(in_file, out_file, ssh, key, encryptor)
-
-        if out_tmp is not None:
-            out_tmp.seek(0)
-            shutil.copyfileobj(out_tmp, sys.stdout)
-            sys.stdout.flush()
+            encryptor.encrypt(reader, writer, None)
 
     def parse_args(self, args):
         epilogue = u"""\
@@ -563,15 +556,13 @@ examples:
         parser.add_argument(
             'in_file',
             nargs='?',
-            type=argparse.FileType('r'),
-            default=sys.stdin,
+            default='-',
             metavar='IN',
             help='optional path, or "-" for stdin, which is the default')
         parser.add_argument(
             'out_file',
             nargs='?',
-            type=argparse.FileType('w'),
-            default=sys.stdout,
+            default='-',
             metavar='OUT',
             help='as above, with stdout as the default')
         return parser.parse_args(args)
@@ -600,17 +591,23 @@ examples:
 
 
 class MainTest(unittest.TestCase):
-    message = "SUPER SECRET FILE CONTENTS"
+    message = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
     def setUp(self):
-        self.files = TestFiles(self.message)
         self.ssh_fixture = SSHTestFixture()
         os.environ['SSH_AUTH_SOCK'] = self.ssh_fixture.socket_path
 
     def test_encrypt(self):
-        Main(['--with', 'openssl', self.files.f0.name, self.files.f1.name])
-        Main([self.files.f1.name, self.files.f2.name])
-        self.assertEqual(self.message, self.files.f2.read())
+        f0 = tempfile.NamedTemporaryFile()
+        f0.write(self.message)
+        f0.flush()
+        f1 = tempfile.NamedTemporaryFile()
+        f2 = tempfile.NamedTemporaryFile()
+        Main(['--with', 'openssl', f0.name, f1.name])
+        Main([f1.name, f2.name])
+        f2.seek(0)
+        actual = f2.read()
+        self.assertEqual(self.message, actual)
 
     def tearDown(self):
         self.ssh_fixture.stop()
@@ -708,20 +705,6 @@ class SSHAgentConnectionTest(unittest.TestCase):
         self.ssh_fixture.stop()
 
 
-class TestFiles(object):
-    """
-    Some test files, the first of which contains a known message.  Useful when
-    testing encrypt(f0, f1) and decrypt(f1, f2).
-    """
-
-    def __init__(self, message):
-        self.f0 = tempfile.NamedTemporaryFile()
-        self.f1 = tempfile.NamedTemporaryFile()
-        self.f2 = tempfile.NamedTemporaryFile()
-        self.f0.write(message)
-        self.f0.flush()
-
-
 def assert_encryptor(test, encryptor):
     message = 'Hello, world!'
     passphrase = 'PASSPHRASE'
@@ -745,24 +728,41 @@ class OpenSSLTest(unittest.TestCase):
 
 class ScryptTest(unittest.TestCase):
     def test_encryptor(self):
-        assert_encryptor(self, Scrypt(['-t', '0.1'], []))
+        assert_encryptor(self, Scrypt(['-t', '0.1']))
 
 
-class SSHEncryptorTest(unittest.TestCase):
+class ShovelEncryptorTest(unittest.TestCase):
+    def test_encryptor(self):
+        message = "Hello, secret world!"
+        fixture = SSHTestFixture()
+        ssh = SSHAgentConnection(fixture.socket_path)
+        key = ssh.identities()[0]
+        encryptor = ShovelEncryptor(ssh=ssh, key=key, encryptor=OpenSSL())
+        assert_encryptor(self, encryptor)
+
+
+class ShovelFileTest(unittest.TestCase):
     def setUp(self):
         self.ssh_fixture = SSHTestFixture()
 
     def test_encrypt_then_decrypt(self):
         message = "Hello, secret world!"
-        files = TestFiles(message)
         ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
         encryptor = OpenSSL()
-        SSHEncryptor().encrypt(
-            files.f0.name, files.f1.name, ssh, key, encryptor)
-        SSHEncryptor().decrypt(files.f1.name, files.f2.name, ssh)
-        self.assertEqual(message, files.f2.read())
+        io0 = StringIO.StringIO(message)
+        sf0 = ShovelFile.encrypt(io0, ssh, key, encryptor)
+        io1 = StringIO.StringIO()
+        sf0.save_to(io1)
+        io1.seek(0)
+        sf1 = ShovelFile.load_from(io1)
+        io2 = StringIO.StringIO()
+        sf1.decrypt(io2, ssh)
+        io2.seek(0)
+        plaintext = io2.read()
+        self.assertEqual(message, plaintext)
 
+    """
     def test_missing_key(self):
         message = "Hello, secret world!"
         files = TestFiles(message)
@@ -779,6 +779,7 @@ class SSHEncryptorTest(unittest.TestCase):
             pass
         self.assertIsNotNone(ex)
         self.assertTrue("key we don't have" in str(ex))
+    """
 
     def tearDown(self):
         self.ssh_fixture.stop()
