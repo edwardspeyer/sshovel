@@ -172,8 +172,7 @@ class SSHAgentConnection(object):
             self.packer.byte(SSHAgentConnection.AGENTC_SIGN_REQUEST),
             self.packer.string(key_blob),
             self.packer.string(message),
-            self.packer.long(flags)
-        )
+            self.packer.long(flags))
         _ = self.packer.read_long()  # length
         response = self.packer.read_byte()
         if response == SSHAgentConnection.AGENT_FAILURE:
