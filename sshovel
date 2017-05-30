@@ -705,84 +705,68 @@ class SSHAgentConnectionTest(unittest.TestCase):
         self.ssh_fixture.stop()
 
 
-def assert_encryptor(test, encryptor):
+class EncryptorTest(unittest.TestCase):
     message = 'Hello, world!'
-    passphrase = 'PASSPHRASE'
-    reader = StringIO.StringIO(message)
-    writer = StringIO.StringIO()
-    encryptor.encrypt(reader, writer, passphrase)
-    writer.seek(0)
-    ciphertext = writer.read()
-    reader = StringIO.StringIO(ciphertext)
-    writer = StringIO.StringIO()
-    encryptor.decrypt(reader, writer, passphrase)
-    writer.seek(0)
-    plaintext = writer.read()
-    test.assertEqual(message, plaintext, encryptor.__class__.__name__)
+
+    def assertEncrypt(self, encryptor, passphrase):
+        reader = StringIO.StringIO(self.message)
+        writer = StringIO.StringIO()
+        encryptor.encrypt(reader, writer, passphrase)
+        writer.seek(0)
+        ciphertext = writer.read()
+        return ciphertext
+
+    def assertDecrypt(self, encryptor, ciphertext, passphrase):
+        reader = StringIO.StringIO(ciphertext)
+        writer = StringIO.StringIO()
+        encryptor.decrypt(reader, writer, passphrase)
+        writer.seek(0)
+        plaintext = writer.read()
+        self.assertEqual(self.message, plaintext, encryptor.__class__.__name__)
 
 
-class OpenSSLTest(unittest.TestCase):
+class OpenSSLTest(EncryptorTest):
     def test_encryptor(self):
-        assert_encryptor(self, OpenSSL())
+        encryptor = OpenSSL()
+        passphrase = 'PASSPHRASE'
+        ciphertext = self.assertEncrypt(encryptor, passphrase)
+        self.assertDecrypt(encryptor, ciphertext, passphrase)
 
 
-class ScryptTest(unittest.TestCase):
+class ScryptTest(EncryptorTest):
     def test_encryptor(self):
-        assert_encryptor(self, Scrypt(['-t', '0.1']))
+        encryptor = Scrypt(['-t', '0.1'])
+        passphrase = 'PASSPHRASE'
+        ciphertext = self.assertEncrypt(encryptor, passphrase)
+        self.assertDecrypt(encryptor, ciphertext, passphrase)
 
 
-class ShovelEncryptorTest(unittest.TestCase):
-    def test_encryptor(self):
-        message = "Hello, secret world!"
-        fixture = SSHTestFixture()
-        ssh = SSHAgentConnection(fixture.socket_path)
-        key = ssh.identities()[0]
-        encryptor = ShovelEncryptor(ssh=ssh, key=key, encryptor=OpenSSL())
-        assert_encryptor(self, encryptor)
-
-
-class ShovelFileTest(unittest.TestCase):
+class ShovelEncryptorTest(EncryptorTest):
     def setUp(self):
-        self.ssh_fixture = SSHTestFixture()
+        self.fixture = SSHTestFixture()
+        self.ssh = SSHAgentConnection(self.fixture.socket_path)
 
-    def test_encrypt_then_decrypt(self):
-        message = "Hello, secret world!"
-        ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
-        key = ssh.identities()[0]
-        encryptor = OpenSSL()
-        io0 = StringIO.StringIO(message)
-        sf0 = ShovelFile.encrypt(io0, ssh, key, encryptor)
-        io1 = StringIO.StringIO()
-        sf0.save_to(io1)
-        io1.seek(0)
-        sf1 = ShovelFile.load_from(io1)
-        io2 = StringIO.StringIO()
-        sf1.decrypt(io2, ssh)
-        io2.seek(0)
-        plaintext = io2.read()
-        self.assertEqual(message, plaintext)
+    def tearDown(self):
+        self.fixture.stop()
 
-    """
-    def test_missing_key(self):
-        message = "Hello, secret world!"
-        files = TestFiles(message)
-        ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
-        key = ssh.identities()[0]
-        encryptor = OpenSSL()
-        SSHEncryptor().encrypt(
-            files.f0.name, files.f1.name, ssh, key, encryptor)
-        self.ssh_fixture.delete_keys()
+    def test_encryptor(self):
+        key = self.ssh.identities()[0]
+        encryptor = ShovelEncryptor(ssh=self.ssh, key=key, encryptor=OpenSSL())
+        ciphertext = self.assertEncrypt(encryptor, 'LOL')
+        self.assertDecrypt(encryptor, ciphertext, 'FOO')
+
+    def test_missing_keys(self):
+        key = self.ssh.identities()[0]
+        encryptor = ShovelEncryptor(ssh=self.ssh, key=key, encryptor=OpenSSL())
+        ciphertext = self.assertEncrypt(encryptor, 'LOL')
+        self.fixture.delete_keys()
         ex = None
         try:
-            SSHEncryptor().decrypt(files.f1.name, files.f2.name, ssh)
+            self.assertDecrypt(encryptor, ciphertext, 'FOO')
         except UserException as ex:
             pass
         self.assertIsNotNone(ex)
         self.assertTrue("key we don't have" in str(ex))
-    """
-
-    def tearDown(self):
-        self.ssh_fixture.stop()
 
 
 Main(sys.argv[1:])
