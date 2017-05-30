@@ -43,7 +43,7 @@ and then asks the ssh-agent to sign some random data with that key.
 
 The signature is used as a passphrase
 for the scrypt(1) symmetric encryption tool.
-(You can also use openssl's command line tool if scrypt isn't available.)
+You can also use openssl's command line tool if scrypt isn't available.
 
 sshovel inspects the input data to see if it is already encrypted.
 If it is, then it will attempt decryption, otherwise encryption is the default.
