@@ -63,14 +63,14 @@ The encrypted file contains the following data:
 - the underlying tool used to encrypt the input file, either "scrypt" or "openssl";
 - the public ssh key and the key's comment field;
 - the random data whose signature was used as the scrypt/openssl passphrase; and
-- the original file, encrypted with scrypt/openssl, and then formatted as Base64.
+- the original file, encrypted with scrypt/openssl
 
 ```
 # echo 'Hello, world!' | sshovel
 sshovel: reading from stdin
 sshovel: encrypting with ssh-key '/tmp/key' and scrypt
 sshovel: waiting for scrypt...
------BEGIN HAZ.CAT/SSHOVEL-----
+Magic: HAZ.CAT/SSHOVEL
 Version: 1
 Encryptor: scrypt
 Key: AAAAB3NzaC1yc2EAAAADAQABAAAAgQDVGqi5Lio1Lak+hOH1+LkfIIgfXQ==
@@ -80,7 +80,6 @@ Nonce: 2a92696986b83ebbeedfbfe6032cf7405f013c8a
 c2NyeXB0ABMAAAAIAAAAASCHZ/QwzOzvZDqhboRTeNvypws0iRUS95PaC8kfPEdOtZa9ISVIeXkI
 tECUoc67NPONdbcTWxj7o6dCS3B4EEqCs4cZYF+HJKHr+Ci0yiyApBczlfnwtpZbdJrEFqPJqto+
 pPU62semvOn8zPvzMoqpS+5cO1KB7cphTbQyrw==
------END HAZ.CAT/SSHOVEL-----
 ```
 
 Decrypting involves asking the ssh-agent to sign the random data again,
