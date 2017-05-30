@@ -592,7 +592,6 @@ class MainTest(unittest.TestCase):
         file2 = tempfile.NamedTemporaryFile()
         Main(['--cipher', 'openssl', file0.name, file1.name])
         Main([file1.name, file2.name])
-        file2.seek(0)
         actual = file2.read()
         self.assertEqual(self.message, actual)
 
