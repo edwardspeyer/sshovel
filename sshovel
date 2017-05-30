@@ -43,7 +43,6 @@ TODO:
 - Test with other types of ssh key.
 - Test with multiple ssh keys.
 - Get rid of double StringIO.StringIOs :P
-- Encryptor isn't a great name given that it decrypts as well -- "Cryptor"?
 
 """
 
@@ -193,10 +192,10 @@ class SSHAgentConnection(object):
         return signature
 
 
-class Encryptor(object):
+class Cipher(object):
     """
-    Interface / superclass for encryptors, plus some tools for finding
-    subclasses.
+    Interface / superclass for command line encryption tools.
+    Plus some tools for finding the subclasses of Cipher.
     """
 
     def __init__(self, **options):
@@ -209,27 +208,27 @@ class Encryptor(object):
         pass
 
     def name(self):
-        return Encryptor.name_of(self.__class__)
+        return Cipher.name_of(self.__class__)
 
     @staticmethod
     def name_of(a_cls):
-        return a_cls.__name__.lower()
+        return a_cls.__name__.lower().replace('cipher', '')
 
     @staticmethod
-    def all_encryptor_names():
+    def all_cipher_names():
         return [
-            Encryptor.name_of(cls)
-            for cls in Encryptor.__subclasses__()]
+            Cipher.name_of(cls)
+            for cls in Cipher.__subclasses__()]
 
     @staticmethod
     def instance_of(name):
-        for cls in Encryptor.__subclasses__():
-            if Encryptor.name_of(cls) == name.lower():
+        for cls in Cipher.__subclasses__():
+            if Cipher.name_of(cls) == name.lower():
                 return cls()
-        raise UserException("unknown encryptor '{}'".format(name))
+        raise UserException("unknown cipher '{}'".format(name))
 
 
-class OpenSSL(Encryptor):
+class OpenSSLCipher(Cipher):
     def encrypt(self, reader, writer, passphrase):
         self._openssl('-e', reader, writer, passphrase)
 
@@ -330,17 +329,14 @@ class Expect(object):
             yield block
 
 
-class Scrypt(Encryptor):
+class ScryptCipher(Cipher):
     """
     Interface to the scrypt(1) command line tool.
     """
 
-    def __init__(self, encrypt_options=[]):
-        self.encrypt_options = encrypt_options
-
     def encrypt(self, reader, writer, passphrase):
         command = ['scrypt', 'enc']
-        command.extend(self.encrypt_options)
+        command.extend(self.options.get('encrypt_options'))
         command.append('-')
         self.scrypt(command, reader, writer, passphrase, True)
 
@@ -363,8 +359,8 @@ class Scrypt(Encryptor):
 
 class ShovelFile(object):
     """
-    Wrapper around an Encryptor that uses an ssh-agent(1) to generate the
-    encryptor's passphrase.
+    Wrapper around an Cipher that uses an ssh-agent(1) to generate the
+    cipher's passphrase.
     """
 
     MAGIC = "HAZ.CAT/SSHOVEL"
@@ -379,31 +375,31 @@ class ShovelFile(object):
 
 
     @classmethod
-    def encrypt(cls, reader, ssh, key, encryptor):
+    def encrypt(cls, reader, ssh, key, cipher):
         nonce = hashlib.sha1(os.urandom(64)).hexdigest()
         signature = ssh.sign(key.blob, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
         tmp = tempfile.NamedTemporaryFile()
-        encryptor.encrypt(reader, tmp, passphrase)
+        cipher.encrypt(reader, tmp, passphrase)
         tmp.seek(0)
-        return cls(encryptor, key, nonce, tmp)
+        return cls(cipher, key, nonce, tmp)
 
     @classmethod
     def load_from(cls, reader):
         magic = cls._read_header(reader, 'Magic')
         version = cls._read_header(reader, 'Version')
-        encryptor_name = cls._read_header(reader, 'Encryptor')
+        cipher_name = cls._read_header(reader, 'Cipher')
         key_blob = cls._read_header_base64(reader, 'Key')
         comment = cls._read_header_base64(reader, 'Comment')
         nonce = cls._read_header(reader, 'Nonce')
         key = SSHAgentConnection.Key(key_blob, comment)
-        encryptor = Encryptor.instance_of(encryptor_name)
+        cipher = Cipher.instance_of(cipher_name)
         encrypted_file = tempfile.NamedTemporaryFile()
         base64.decode(reader, encrypted_file)
-        return cls(encryptor, key, nonce, encrypted_file)
+        return cls(cipher, key, nonce, encrypted_file)
 
-    def __init__(self, encryptor, key, nonce, encrypted_file):
-        self.encryptor = encryptor
+    def __init__(self, cipher, key, nonce, encrypted_file):
+        self.cipher = cipher
         self.key = key
         self.nonce = nonce
         self.encrypted_file = encrypted_file
@@ -411,7 +407,7 @@ class ShovelFile(object):
     def save_to(self, writer):
         writer.write(self._header('Magic', self.MAGIC))
         writer.write(self._header('Version', self.VERSION))
-        writer.write(self._header('Encryptor', self.encryptor.name()))
+        writer.write(self._header('Cipher', self.cipher.name()))
         writer.write(self._header('Key', base64.b64encode(self.key.blob)))
         writer.write(self._header('Comment', base64.b64encode(self.key.comment)))
         writer.write(self._header('Nonce', self.nonce))
@@ -419,7 +415,7 @@ class ShovelFile(object):
         base64.encode(self.encrypted_file, writer)
 
     def decrypt(self, writer, ssh):
-        log('decrypting with {} and {}'.format(self.key.comment, self.encryptor.name()))
+        log('decrypting with {} and {}'.format(self.key.comment, self.cipher.name()))
         signature = ssh.sign(self.key.blob, self.nonce)
         if signature is None:
             raise UserException(
@@ -428,7 +424,7 @@ class ShovelFile(object):
         passphrase = hashlib.sha1(signature).hexdigest()
         reader = self.encrypted_file
         reader.seek(0)
-        self.encryptor.decrypt(reader, writer, passphrase)
+        self.cipher.decrypt(reader, writer, passphrase)
 
     @staticmethod
     def _read_header(f, key):
@@ -450,12 +446,12 @@ class ShovelFile(object):
         return '{}: {}\r\n'.format(key, value)
 
 
-class ShovelEncryptor(Encryptor):
+class ShovelCipher(Cipher):
     def encrypt(self, reader, writer, passphrase=None):
         ssh = self.options.get('ssh')
         key = self.options.get('key')
-        encryptor = self.options.get('encryptor')
-        ShovelFile.encrypt(reader, ssh, key, encryptor).save_to(writer)
+        cipher = self.options.get('cipher')
+        ShovelFile.encrypt(reader, ssh, key, cipher).save_to(writer)
 
     def decrypt(self, reader, writer, passphrase=None):
         ssh = self.options.get('ssh')
@@ -478,7 +474,7 @@ class Main(object):
             unittest_args.extend(args.test)
             unittest.main(argv=unittest_args)
 
-        encryptor = Encryptor.instance_of(args.encryptor)
+        cipher = Cipher.instance_of(args.cipher)
         ssh = self.find_agent()
         keys = ssh.identities()
         if not keys:
@@ -488,7 +484,7 @@ class Main(object):
         if args.key:
             key = self.match_key(keys, args.key)
 
-        encryptor = ShovelEncryptor(ssh=ssh, key=key, encryptor=encryptor)
+        cipher = ShovelCipher(ssh=ssh, key=key, cipher=cipher)
 
         if args.in_file == '-':
             args.in_file = '/dev/stdin'
@@ -504,13 +500,13 @@ class Main(object):
             log("reading from stdin")
 
         if ShovelFile.is_shovel_file(reader):
-            encryptor.decrypt(reader, writer, None)
+            cipher.decrypt(reader, writer, None)
         else:
             log("encrypting{} with ssh-key '{}' and {}".format(
                 (writer == sys.stdout and ' to stdout' or ''),
                 key.comment,
-                args.encryptor))
-            encryptor.encrypt(reader, writer, None)
+                args.cipher))
+            cipher.encrypt(reader, writer, None)
 
     def parse_args(self, args):
         epilogue = u"""\
@@ -533,7 +529,7 @@ examples:
 \u00A0
 """
         parser = argparse.ArgumentParser(
-            usage='%(prog)s [--with TOOL] [IN] [OUT]',
+            usage='%(prog)s [--cipher CIPHER] [IN] [OUT]',
             formatter_class=argparse.RawDescriptionHelpFormatter,
             description='Encrypt files with ssh-agent, bury your secrets',
             epilog=epilogue)
@@ -542,11 +538,11 @@ examples:
             metavar='MATCH',
             help='use the ssh key whose comment matches MATCH')
         parser.add_argument(
-            '--with',
-            dest='encryptor',
+            '--cipher',
+            dest='cipher',
             default='scrypt',
             metavar='TOOL',
-            choices=Encryptor.all_encryptor_names(),
+            choices=Cipher.all_cipher_names(),
             help='encrypt with "scrypt" (default) or "openssl"')
         parser.add_argument(
             '--test',
@@ -603,7 +599,7 @@ class MainTest(unittest.TestCase):
         f0.flush()
         f1 = tempfile.NamedTemporaryFile()
         f2 = tempfile.NamedTemporaryFile()
-        Main(['--with', 'openssl', f0.name, f1.name])
+        Main(['--cipher', 'openssl', f0.name, f1.name])
         Main([f1.name, f2.name])
         f2.seek(0)
         actual = f2.read()
@@ -705,43 +701,43 @@ class SSHAgentConnectionTest(unittest.TestCase):
         self.ssh_fixture.stop()
 
 
-class EncryptorTest(unittest.TestCase):
+class CipherTest(unittest.TestCase):
     message = 'Hello, world!'
 
-    def assertEncrypt(self, encryptor, passphrase):
+    def assertEncrypt(self, cipher, passphrase):
         reader = StringIO.StringIO(self.message)
         writer = StringIO.StringIO()
-        encryptor.encrypt(reader, writer, passphrase)
+        cipher.encrypt(reader, writer, passphrase)
         writer.seek(0)
         ciphertext = writer.read()
         return ciphertext
 
-    def assertDecrypt(self, encryptor, ciphertext, passphrase):
+    def assertDecrypt(self, cipher, ciphertext, passphrase):
         reader = StringIO.StringIO(ciphertext)
         writer = StringIO.StringIO()
-        encryptor.decrypt(reader, writer, passphrase)
+        cipher.decrypt(reader, writer, passphrase)
         writer.seek(0)
         plaintext = writer.read()
-        self.assertEqual(self.message, plaintext, encryptor.__class__.__name__)
+        self.assertEqual(self.message, plaintext, cipher.__class__.__name__)
 
 
-class OpenSSLTest(EncryptorTest):
-    def test_encryptor(self):
-        encryptor = OpenSSL()
+class OpenSSLCipherTest(CipherTest):
+    def test_cipher(self):
+        cipher = OpenSSLCipher()
         passphrase = 'PASSPHRASE'
-        ciphertext = self.assertEncrypt(encryptor, passphrase)
-        self.assertDecrypt(encryptor, ciphertext, passphrase)
+        ciphertext = self.assertEncrypt(cipher, passphrase)
+        self.assertDecrypt(cipher, ciphertext, passphrase)
 
 
-class ScryptTest(EncryptorTest):
-    def test_encryptor(self):
-        encryptor = Scrypt(['-t', '0.1'])
+class ScryptCipherTest(CipherTest):
+    def test_cipher(self):
+        cipher = ScryptCipher(encrypt_options=['-t', '0.1'])
         passphrase = 'PASSPHRASE'
-        ciphertext = self.assertEncrypt(encryptor, passphrase)
-        self.assertDecrypt(encryptor, ciphertext, passphrase)
+        ciphertext = self.assertEncrypt(cipher, passphrase)
+        self.assertDecrypt(cipher, ciphertext, passphrase)
 
 
-class ShovelEncryptorTest(EncryptorTest):
+class ShovelCipherTest(CipherTest):
     def setUp(self):
         self.fixture = SSHTestFixture()
         self.ssh = SSHAgentConnection(self.fixture.socket_path)
@@ -749,20 +745,20 @@ class ShovelEncryptorTest(EncryptorTest):
     def tearDown(self):
         self.fixture.stop()
 
-    def test_encryptor(self):
+    def test_cipher(self):
         key = self.ssh.identities()[0]
-        encryptor = ShovelEncryptor(ssh=self.ssh, key=key, encryptor=OpenSSL())
-        ciphertext = self.assertEncrypt(encryptor, 'LOL')
-        self.assertDecrypt(encryptor, ciphertext, 'FOO')
+        cipher = ShovelCipher(ssh=self.ssh, key=key, cipher=OpenSSLCipher())
+        ciphertext = self.assertEncrypt(cipher, 'LOL')
+        self.assertDecrypt(cipher, ciphertext, 'FOO')
 
     def test_missing_keys(self):
         key = self.ssh.identities()[0]
-        encryptor = ShovelEncryptor(ssh=self.ssh, key=key, encryptor=OpenSSL())
-        ciphertext = self.assertEncrypt(encryptor, 'LOL')
+        cipher = ShovelCipher(ssh=self.ssh, key=key, cipher=OpenSSLCipher())
+        ciphertext = self.assertEncrypt(cipher, 'LOL')
         self.fixture.delete_keys()
         ex = None
         try:
-            self.assertDecrypt(encryptor, ciphertext, 'FOO')
+            self.assertDecrypt(cipher, ciphertext, 'FOO')
         except UserException as ex:
             pass
         self.assertIsNotNone(ex)
