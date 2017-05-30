@@ -41,12 +41,10 @@ TODO:
 - Handle ^C
 - Test with other types of ssh key.
 - Test with multiple ssh keys.
-- Get rid of double StringIO.StringIOs :P
 
 """
 
 from collections import namedtuple
-import StringIO
 import argparse
 import base64
 import fcntl
@@ -601,7 +599,7 @@ class MainTest(unittest.TestCase):
 class PackerTest(unittest.TestCase):
     def test_read_then_write(self):
         message = "Hello, world!"
-        sio = StringIO.StringIO()
+        sio = io.BytesIO(message)
         pack = Packer.from_file(sio)
         pack.write(pack.byte(99), pack.string(message))
         sio.seek(0)
@@ -694,16 +692,16 @@ class CipherTest(unittest.TestCase):
     message = 'Hello, world!'
 
     def assert_encrypt(self, cipher, passphrase):
-        reader = StringIO.StringIO(self.message)
-        writer = StringIO.StringIO()
+        reader = io.BytesIO(self.message)
+        writer = io.BytesIO()
         cipher.encrypt(reader, writer, passphrase)
         writer.seek(0)
         ciphertext = writer.read()
         return ciphertext
 
     def assert_decrypt(self, cipher, ciphertext, passphrase):
-        reader = StringIO.StringIO(ciphertext)
-        writer = StringIO.StringIO()
+        reader = io.BytesIO(ciphertext)
+        writer = io.BytesIO()
         cipher.decrypt(reader, writer, passphrase)
         writer.seek(0)
         plaintext = writer.read()
