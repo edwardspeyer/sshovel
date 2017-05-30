@@ -379,10 +379,10 @@ class ShovelFile(object):
         nonce = hashlib.sha1(os.urandom(64)).hexdigest()
         signature = ssh.sign(key.blob, nonce)
         passphrase = hashlib.sha1(signature).hexdigest()
-        tmp = tempfile.NamedTemporaryFile()
-        cipher.encrypt(reader, tmp, passphrase)
-        tmp.seek(0)
-        return cls(cipher, key, nonce, tmp)
+        buf = io.BytesIO()
+        cipher.encrypt(reader, buf, passphrase)
+        buf.seek(0)
+        return cls(cipher, key, nonce, buf)
 
     @classmethod
     def load_from(cls, reader):
@@ -394,9 +394,9 @@ class ShovelFile(object):
         nonce = cls._read_header(reader, 'Nonce')
         key = SSHAgentConnection.Key(key_blob, comment)
         cipher = Cipher.instance_of(cipher_name)
-        encrypted_file = tempfile.NamedTemporaryFile()
-        base64.decode(reader, encrypted_file)
-        return cls(cipher, key, nonce, encrypted_file)
+        buf = io.BytesIO()
+        base64.decode(reader, buf)
+        return cls(cipher, key, nonce, buf)
 
     def __init__(self, cipher, key, nonce, encrypted_file):
         self.cipher = cipher
