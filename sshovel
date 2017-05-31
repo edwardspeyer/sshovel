@@ -31,7 +31,6 @@ TODO:
   the key, or if the agent prompts us with a dialog that we dismiss.
   We should look up keys to see if the agent has them, before using
   them to sign data?
-- Handle ^C
 - Test with other types of ssh key.
 - Test with multiple ssh keys.
 
@@ -465,11 +464,15 @@ class ShovelFile(object):
 
 class Main(object):
     def __init__(self, args):
+        signal.signal(signal.SIGQUIT, self._quit)
         args = self.parse_args(args)
         try:
             self._main(args)
         except UserException as ex:
             log(ex.message)
+            sys.exit(1)
+        except KeyboardInterrupt:
+            log('interrupted; exiting')
             sys.exit(1)
 
     def _main(self, args):
@@ -509,6 +512,9 @@ class Main(object):
                 key.comment,
                 args.cipher))
             ShovelFile.encrypt(reader, ssh, key, cipher).save_to(writer)
+
+    def _quit(*args):
+        raise KeyboardInterrupt()
 
     @staticmethod
     def parse_args(args):
