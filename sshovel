@@ -386,7 +386,7 @@ class ShovelFile(object):
     """
 
     MAGIC = "HAZ.CAT/SSHOVEL"
-    VERSION = 1
+    VERSION = 8
     NONCE_SIZE = 1024
 
     @classmethod
@@ -400,11 +400,12 @@ class ShovelFile(object):
         nonce = os.urandom(cls.NONCE_SIZE)
         flags = cls._signing_flags_for(key)
         signature = ssh.sign(key.blob, nonce, flags)
+        key_hash = hashlib.sha1(nonce + key.blob).digest()
         passphrase = hashlib.sha1(signature).hexdigest()
         buf = io.BytesIO()
         cipher.encrypt(reader, buf, passphrase)
         buf.seek(0)
-        return cls(cipher, key, nonce, buf)
+        return cls(cipher, nonce, key_hash, buf)
 
     @classmethod
     def load_from(cls, reader):
@@ -414,19 +415,17 @@ class ShovelFile(object):
         version = header.long()
         assert version == cls.VERSION
         cipher_name = header.string()
-        num_keys = header.long()
-        assert num_keys == 1
-        key_blob = header.string()
-        key_comment = header.string()
         nonce = header.string()
-        key = SSHKey.parse(key_blob, key_comment)
+        num_key_hashes = header.long()
+        assert num_key_hashes == 1
+        key_hash = header.string()
         cipher = Cipher.instance_of(cipher_name)
-        return cls(cipher, key, nonce, reader)
+        return cls(cipher, nonce, key_hash, reader)
 
-    def __init__(self, cipher, key, nonce, encrypted_file):
+    def __init__(self, cipher, nonce, key_hash, encrypted_file):
         self.cipher = cipher
-        self.key = key
         self.nonce = nonce
+        self.key_hash = key_hash
         self.encrypted_file = encrypted_file
 
     def save_to(self, writer):
@@ -434,25 +433,29 @@ class ShovelFile(object):
         header = BinaryWriter()
         header.long(self.VERSION)
         header.string(self.cipher.name())
-        header.long(1)
-        header.string(self.key.blob)
-        header.string(self.key.comment)
         header.string(self.nonce)
+        header.long(1)
+        header.string(self.key_hash)
         writer.write(str(header))
         shutil.copyfileobj(self.encrypted_file, writer)
 
     def decrypt(self, writer, ssh):
+        key = self._find_key(ssh)
         log('decrypting with {} and {}'.format(
-            self.key.comment,
+            key.comment,
             self.cipher.name()))
-        flags = self._signing_flags_for(self.key)
-        signature = ssh.sign(self.key.blob, self.nonce, flags)
-        if signature is None:
-            raise UserException(
-                "file is encrypted with a key we don't have: {}".format(
-                    self.key.comment))
+        flags = self._signing_flags_for(key)
+        signature = ssh.sign(key.blob, self.nonce, flags)
         passphrase = hashlib.sha1(signature).hexdigest()
         self.cipher.decrypt(self.encrypted_file, writer, passphrase)
+
+    def _find_key(self, ssh):
+        for candidate_key in ssh.identities():
+            key_hash = hashlib.sha1(self.nonce + candidate_key.blob).digest()
+            if key_hash == self.key_hash:
+                return candidate_key
+        raise UserException(
+            "file is encrypted with a key we don't have")
 
     @staticmethod
     def _signing_flags_for(key):
