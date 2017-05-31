@@ -125,7 +125,7 @@ class BinaryWriter(object):
         return self
 
 
-class SSHAgentConnection(object):
+class SSHAgent(object):
     """
     Interface to a running ssh-agent(1)
     """
@@ -152,25 +152,25 @@ class SSHAgentConnection(object):
     def identities(self):
         self.sock.sendall(
             BinaryWriter()
-            .byte(SSHAgentConnection.AGENTC_REQUEST_IDENTITIES)
+            .byte(SSHAgent.AGENTC_REQUEST_IDENTITIES)
             .end())
         reader = BinaryReader(self.sock.recv)
         _ = reader.long()  # length
         response = reader.byte()
-        assert response == SSHAgentConnection.AGENT_IDENTITIES_ANSWER
+        assert response == SSHAgent.AGENT_IDENTITIES_ANSWER
         num_keys = reader.long()
         result = []
         for _ in range(num_keys):
             blob = reader.string()
             comment = reader.string()
-            key = SSHAgentConnection.Key(blob, comment)
+            key = SSHAgent.Key(blob, comment)
             result.append(key)
         return result
 
     def sign(self, key_blob, message, flags=0):
         self.sock.sendall(
             BinaryWriter()
-            .byte(SSHAgentConnection.AGENTC_SIGN_REQUEST)
+            .byte(SSHAgent.AGENTC_SIGN_REQUEST)
             .string(key_blob)
             .string(message)
             .long(flags)
@@ -178,9 +178,9 @@ class SSHAgentConnection(object):
         reader = BinaryReader(self.sock.recv)
         _ = reader.long()  # length
         response = reader.byte()
-        if response == SSHAgentConnection.AGENT_FAILURE:
+        if response == SSHAgent.AGENT_FAILURE:
             return None
-        assert response == SSHAgentConnection.AGENT_SIGN_RESPONSE
+        assert response == SSHAgent.AGENT_SIGN_RESPONSE
         signature = reader.string()
         return signature
 
@@ -386,7 +386,7 @@ class ShovelFile(object):
         key_blob = cls._read_header_base64(reader, 'Key')
         comment = cls._read_header_base64(reader, 'Comment')
         nonce = cls._read_header_base64(reader, 'Nonce')
-        key = SSHAgentConnection.Key(key_blob, comment)
+        key = SSHAgent.Key(key_blob, comment)
         cipher = Cipher.instance_of(cipher_name)
         buf = io.BytesIO()
         base64.decode(reader, buf)
@@ -551,7 +551,7 @@ examples:
         socket_path = os.environ.get('SSH_AUTH_SOCK')
         if socket_path == "":
             raise UserException("SSH_AUTH_SOCK is empty or unset")
-        return SSHAgentConnection(socket_path)
+        return SSHAgent(socket_path)
 
     @staticmethod
     def match_key(keys, pattern):
@@ -678,17 +678,17 @@ aZkvLueqxAr5SzU9sTiL6tBQAEaESEHOTm11g+IRmFA=
         os.kill(self.agent_pid, signal.SIGKILL)
 
 
-class SSHAgentConnectionTest(unittest.TestCase):
+class SSHAgentTest(unittest.TestCase):
     def setUp(self):
         self.ssh_fixture = SSHTestFixture()
 
     def test_identities(self):
-        ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
+        ssh = SSHAgent(self.ssh_fixture.socket_path)
         keys = ssh.identities()
         self.assertEqual(len(keys), 1, "number of keys loaded in agent")
 
     def test_sign(self):
-        ssh = SSHAgentConnection(self.ssh_fixture.socket_path)
+        ssh = SSHAgent(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
         message = "Hello, world!"
         expected_digest = "791c659db0f314126ff0226beaa25aa6b8c4f00e"
@@ -745,7 +745,7 @@ class ShovelFileTest(CipherTest):
         self.fixture.stop()
 
     def test_cipher(self):
-        ssh = SSHAgentConnection(self.fixture.socket_path)
+        ssh = SSHAgent(self.fixture.socket_path)
         key = ssh.identities()[0]
         message = "Hello, world!!!!1"
         cipher = OpenSSLCipher()
@@ -756,7 +756,7 @@ class ShovelFileTest(CipherTest):
         self.assertEqual(message, dst.read())
 
     def test_missing_keys(self):
-        ssh = SSHAgentConnection(self.fixture.socket_path)
+        ssh = SSHAgent(self.fixture.socket_path)
         key = ssh.identities()[0]
         message = "Hello, world!!!!1"
         cipher = OpenSSLCipher()
