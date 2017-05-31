@@ -35,6 +35,7 @@ TODO:
 - Test with multiple ssh keys.
 
 """
+# pylint: disable=missing-docstring
 
 import argparse
 import fcntl
@@ -513,7 +514,9 @@ class Main(object):
                 args.cipher))
             ShovelFile.encrypt(reader, ssh, key, cipher).save_to(writer)
 
+    @staticmethod
     def _quit(*args):
+        # pylint: disable=unused-argument
         raise KeyboardInterrupt()
 
     @staticmethod
