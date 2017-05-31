@@ -73,58 +73,56 @@ def log(message):
     sys.stderr.write(message)
 
 
-class Packer(object):
+class BinaryReader(object):
     """
-    Pack and unpack length prefixed binary data, as defined by the SSH
-    standards.
+    Wrapper around `struct` for reading SSH binary messages.
     """
 
-    @staticmethod
-    def byte(a_byte):
-        return struct.pack('>B', a_byte)
-
-    @staticmethod
-    def long(a_long):
-        return struct.pack('>L', a_long)
-
-    @staticmethod
-    def string(a_string):
-        length = len(a_string)
-        template = '>L{}s'.format(length)
-        return struct.pack(template, length, a_string)
-
-    @classmethod
-    def from_socket(cls, a_socket):
-        return cls(a_socket.recv, a_socket.sendall)
-
-    @classmethod
-    def from_file(cls, a_file):
-        return cls(a_file.read, a_file.write)
-
-    def __init__(self, read_fn, write_fn):
+    def __init__(self, read_fn):
         self.read_fn = read_fn
-        self.write_fn = write_fn
 
-    def write(self, *values):
-        body = ''.join(values)
-        length = len(body)
-        self.write_fn(self.long(length))
-        self.write_fn(body)
+    def byte(self):
+        return self._read(1, '>B')
 
-    def read_byte(self):
-        return self.unpack(1, '>B')
+    def long(self):
+        return self._read(4, '>L')
 
-    def read_long(self):
-        return self.unpack(4, '>L')
+    def string(self):
+        length = self.long()
+        return self._read(length, '>%ds' % length)
 
-    def read_string(self):
-        length = self.read_long()
-        template = '{}s'.format(length)
-        return self.unpack(length, template)
+    def _read(self, length, template):
+        return struct.unpack(template, self.read_fn(length))[0]
 
-    def unpack(self, length, template):
-        some_bytes = self.read_fn(length)
-        return struct.unpack(template, some_bytes)[0]
+
+class BinaryWriter(object):
+    """
+    Wrapper around `struct` for building a buffer of SSH binary messages.
+    """
+
+    def __init__(self):
+        self.buf = io.BytesIO()
+
+    def byte(self, value):
+        return self._pack('>B', value)
+
+    def long(self, value):
+        return self._pack('>L', value)
+
+    def string(self, value):
+        string = str(value)
+        length = len(string)
+        return self._pack('>L%ds' % length, length, string)
+
+    def end(self):
+        return str(BinaryWriter().string(self))
+
+    def __str__(self):
+        return self.buf.getvalue()
+
+    def _pack(self, template, *values):
+        self.buf.write(struct.pack(template, *values))
+        return self
 
 
 class SSHAgentConnection(object):
@@ -144,41 +142,46 @@ class SSHAgentConnection(object):
     AGENT_FAILURE = 5
 
     def __init__(self, socket_path):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
         try:
-            sock.connect(socket_path)
+            self.sock.connect(socket_path)
         except IOError as ex:
             raise UserException(
                 "can't connect to ssh-agent socket %s: %s" % (socket_path, ex))
-        self.packer = Packer.from_socket(sock)
 
     def identities(self):
-        self.packer.write(
-            self.packer.byte(SSHAgentConnection.AGENTC_REQUEST_IDENTITIES))
-        _ = self.packer.read_long()  # length
-        response = self.packer.read_byte()
+        self.sock.sendall(
+            BinaryWriter()
+            .byte(SSHAgentConnection.AGENTC_REQUEST_IDENTITIES)
+            .end())
+        reader = BinaryReader(self.sock.recv)
+        _ = reader.long()  # length
+        response = reader.byte()
         assert response == SSHAgentConnection.AGENT_IDENTITIES_ANSWER
-        num_keys = self.packer.read_long()
+        num_keys = reader.long()
         result = []
         for _ in range(num_keys):
-            blob = self.packer.read_string()
-            comment = self.packer.read_string()
+            blob = reader.string()
+            comment = reader.string()
             key = SSHAgentConnection.Key(blob, comment)
             result.append(key)
         return result
 
     def sign(self, key_blob, message, flags=0):
-        self.packer.write(
-            self.packer.byte(SSHAgentConnection.AGENTC_SIGN_REQUEST),
-            self.packer.string(key_blob),
-            self.packer.string(message),
-            self.packer.long(flags))
-        _ = self.packer.read_long()  # length
-        response = self.packer.read_byte()
+        self.sock.sendall(
+            BinaryWriter()
+            .byte(SSHAgentConnection.AGENTC_SIGN_REQUEST)
+            .string(key_blob)
+            .string(message)
+            .long(flags)
+            .end())
+        reader = BinaryReader(self.sock.recv)
+        _ = reader.long()  # length
+        response = reader.byte()
         if response == SSHAgentConnection.AGENT_FAILURE:
             return None
         assert response == SSHAgentConnection.AGENT_SIGN_RESPONSE
-        signature = self.packer.read_string()
+        signature = reader.string()
         return signature
 
 
@@ -590,16 +593,32 @@ class MainTest(unittest.TestCase):
         self.ssh_fixture.stop()
 
 
-class PackerTest(unittest.TestCase):
-    def test_read_then_write(self):
-        message = "Hello, world!"
-        sio = io.BytesIO(message)
-        pack = Packer.from_file(sio)
-        pack.write(pack.byte(99), pack.string(message))
-        sio.seek(0)
-        self.assertEqual(pack.read_long(), 18, "total pack length")
-        self.assertEqual(pack.read_byte(), 99, "packed byte")
-        self.assertEqual(pack.read_string(), message, "packed string")
+class BinaryWriterTest(unittest.TestCase):
+    def test_writer(self):
+        age, name, sales = 58, 'Sade', 23500000
+        msg = BinaryWriter().string(name).byte(age).long(sales).end()
+        expected = (
+            '\x00\x00\x00\x0d'
+            '\x00\x00\x00\x04'
+            '\x53\x61\x64\x65'
+            '\x3a'
+            '\x01\x66\x94\xe0')
+        self.assertEqual(msg, expected)
+
+
+class BinaryReaderTest(unittest.TestCase):
+    def test_reader(self):
+        buf = io.BytesIO(
+            '\x00\x00\x00\x11'
+            '\x00\x00\x00\x08'
+            '\x4f\x6c\x64\x66\x69\x65\x6c\x64'
+            '\x40'
+            '\x00\x28\x21\x70')
+        msg = BinaryReader(buf.read)
+        self.assertEqual(msg.long(), 17)
+        self.assertEqual(msg.string(), 'Oldfield')
+        self.assertEqual(msg.byte(), 64)
+        self.assertEqual(msg.long(), 2630000)
 
 
 class SSHTestFixture(object):
