@@ -351,7 +351,7 @@ class ScryptCipher(Cipher):
 
     def encrypt(self, reader, writer, passphrase):
         command = ['scrypt', 'enc']
-        command.extend(self.options.get('encrypt_options'))
+        command.extend(self.options.get('encrypt_options', []))
         command.append('-')
         self.scrypt(command, reader, writer, passphrase, passphrase)
 
