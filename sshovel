@@ -31,7 +31,6 @@ TODO:
   the key, or if the agent prompts us with a dialog that we dismiss.
   We should look up keys to see if the agent has them, before using
   them to sign data?
-- SSH sign flags: 512?  What does open ssh do?  Only for rsa keys.
 - Harden OpenSSL parameters?
 - Handle ^C
 - Test with other types of ssh key.
@@ -392,7 +391,7 @@ class ShovelFile(object):
     @classmethod
     def encrypt(cls, reader, ssh, key, cipher):
         nonce = hashlib.sha1(os.urandom(cls.NONCE_SIZE)).digest()
-        flags = SSHAgent.SIGN_FLAG_NONE
+        flags = cls._signing_flags_for(key)
         signature = ssh.sign(key.blob, nonce, flags)
         passphrase = hashlib.sha1(signature).hexdigest()
         buf = io.BytesIO()
@@ -435,7 +434,7 @@ class ShovelFile(object):
         log('decrypting with {} and {}'.format(
             self.key.comment,
             self.cipher.name()))
-        flags = SSHAgent.SIGN_FLAG_NONE
+        flags = self._signing_flags_for(self.key)
         signature = ssh.sign(self.key.blob, self.nonce, flags)
         if signature is None:
             raise UserException(
@@ -445,6 +444,14 @@ class ShovelFile(object):
         reader = self.encrypted_file
         reader.seek(0)
         self.cipher.decrypt(reader, writer, passphrase)
+
+    @staticmethod
+    def _signing_flags_for(key):
+        if key.is_rsa():
+            # Use SHA2 when available:
+            # https://crypto.stackexchange.com/questions/15051/
+            return SSHAgent.SIGN_FLAG_RSA_SHA2_512
+        return SSHAgent.SIGN_FLAG_NONE
 
     @staticmethod
     def _read_header(reader, key):
