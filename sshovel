@@ -40,7 +40,6 @@ TODO:
 
 from collections import namedtuple
 import argparse
-import base64
 import fcntl
 import hashlib
 import io
@@ -383,10 +382,9 @@ class ShovelFile(object):
 
     @classmethod
     def is_shovel_file(cls, reader):
-        expected_magic = cls._header('Magic', cls.MAGIC)
-        length = len(expected_magic)
-        actual_magic = reader.peek(len(expected_magic))[0:length]
-        return actual_magic == expected_magic
+        length = len(cls.MAGIC)
+        magic = reader.peek(length)[0:length]
+        return magic == cls.MAGIC
 
     @classmethod
     def encrypt(cls, reader, ssh, key, cipher):
@@ -401,17 +399,20 @@ class ShovelFile(object):
 
     @classmethod
     def load_from(cls, reader):
-        _ = cls._read_header(reader, 'Magic')
-        _ = cls._read_header(reader, 'Version')
-        cipher_name = cls._read_header(reader, 'Cipher')
-        key_blob = cls._read_header_base64(reader, 'Key')
-        comment = cls._read_header_base64(reader, 'Comment')
-        nonce = cls._read_header_base64(reader, 'Nonce')
-        key = SSHKey.parse(key_blob, comment)
+        magic = reader.read(len(cls.MAGIC))
+        assert magic == cls.MAGIC
+        header = BinaryReader(reader.read)
+        version = header.long()
+        assert version == cls.VERSION
+        cipher_name = header.string()
+        num_keys = header.long()
+        assert num_keys == 1
+        key_blob = header.string()
+        key_comment = header.string()
+        nonce = header.string()
+        key = SSHKey.parse(key_blob, key_comment)
         cipher = Cipher.instance_of(cipher_name)
-        buf = io.BytesIO()
-        base64.decode(reader, buf)
-        return cls(cipher, key, nonce, buf)
+        return cls(cipher, key, nonce, reader)
 
     def __init__(self, cipher, key, nonce, encrypted_file):
         self.cipher = cipher
@@ -420,15 +421,16 @@ class ShovelFile(object):
         self.encrypted_file = encrypted_file
 
     def save_to(self, writer):
-        writer.write(self._header('Magic', self.MAGIC))
-        writer.write(self._header('Version', self.VERSION))
-        writer.write(self._header('Cipher', self.cipher.name()))
-        writer.write(self._header('Key', base64.b64encode(self.key.blob)))
-        writer.write(
-            self._header('Comment', base64.b64encode(self.key.comment)))
-        writer.write(self._header('Nonce', base64.b64encode(self.nonce)))
-        writer.write("\r\n")
-        base64.encode(self.encrypted_file, writer)
+        writer.write(self.MAGIC)
+        header = BinaryWriter()
+        header.long(self.VERSION)
+        header.string(self.cipher.name())
+        header.long(1)
+        header.string(self.key.blob)
+        header.string(self.key.comment)
+        header.string(self.nonce)
+        writer.write(str(header))
+        shutil.copyfileobj(self.encrypted_file, writer)
 
     def decrypt(self, writer, ssh):
         log('decrypting with {} and {}'.format(
@@ -441,9 +443,7 @@ class ShovelFile(object):
                 "file is encrypted with a key we don't have: {}".format(
                     self.key.comment))
         passphrase = hashlib.sha1(signature).hexdigest()
-        reader = self.encrypted_file
-        reader.seek(0)
-        self.cipher.decrypt(reader, writer, passphrase)
+        self.cipher.decrypt(self.encrypted_file, writer, passphrase)
 
     @staticmethod
     def _signing_flags_for(key):
@@ -452,25 +452,6 @@ class ShovelFile(object):
             # https://crypto.stackexchange.com/questions/15051/
             return SSHAgent.SIGN_FLAG_RSA_SHA2_512
         return SSHAgent.SIGN_FLAG_NONE
-
-    @staticmethod
-    def _read_header(reader, key):
-        line = reader.readline().rstrip()
-        actual_key, value = line.split(': ')
-        if actual_key != key:
-            raise UserException(
-                "did not find expected key {} in line: {}"
-                .format(key, line))
-        return value
-
-    @classmethod
-    def _read_header_base64(cls, reader, key):
-        value = cls._read_header(reader, key)
-        return base64.b64decode(value)
-
-    @staticmethod
-    def _header(key, value):
-        return '{}: {}\r\n'.format(key, value)
 
 
 class Main(object):
