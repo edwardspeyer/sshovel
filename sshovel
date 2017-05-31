@@ -381,7 +381,7 @@ class ScryptCipher(Cipher):
 
 class ShovelFile(object):
     """
-    Wrapper around an Cipher that uses an ssh-agent(1) to generate the
+    Wrapper around a Cipher that uses an ssh-agent(1) to generate the
     cipher's passphrase.
     """
 
