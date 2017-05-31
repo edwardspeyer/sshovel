@@ -78,6 +78,10 @@ class BinaryReader(object):
     Wrapper around `struct` for reading SSH binary messages.
     """
 
+    @classmethod
+    def from_string(cls, string):
+        return cls(io.BytesIO(string).read)
+
     def __init__(self, read_fn):
         self.read_fn = read_fn
 
@@ -126,9 +130,20 @@ class BinaryWriter(object):
 
 
 class SSHKey(object):
-    def __init__(self, blob, comment):
+    ALGORITHM_RSA = 'ssh-rsa'
+
+    @classmethod
+    def parse(cls, blob, comment):
+        algorithm = BinaryReader.from_string(blob).string()
+        return cls(algorithm, blob, comment)
+
+    def __init__(self, algorithm, blob, comment):
+        self.algorithm = algorithm
         self.blob = blob
         self.comment = comment
+
+    def is_rsa(self):
+        return self.algorithm == self.ALGORITHM_RSA
 
 
 class SSHAgent(object):
@@ -169,7 +184,7 @@ class SSHAgent(object):
         for _ in range(num_keys):
             blob = reader.string()
             comment = reader.string()
-            key = SSHKey(blob, comment)
+            key = SSHKey.parse(blob, comment)
             result.append(key)
         return result
 
@@ -393,7 +408,7 @@ class ShovelFile(object):
         key_blob = cls._read_header_base64(reader, 'Key')
         comment = cls._read_header_base64(reader, 'Comment')
         nonce = cls._read_header_base64(reader, 'Nonce')
-        key = SSHKey(key_blob, comment)
+        key = SSHKey.parse(key_blob, comment)
         cipher = Cipher.instance_of(cipher_name)
         buf = io.BytesIO()
         base64.decode(reader, buf)
