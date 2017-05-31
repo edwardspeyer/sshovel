@@ -31,7 +31,6 @@ TODO:
   the key, or if the agent prompts us with a dialog that we dismiss.
   We should look up keys to see if the agent has them, before using
   them to sign data?
-- Harden OpenSSL parameters?
 - Handle ^C
 - Test with other types of ssh key.
 - Test with multiple ssh keys.
@@ -199,6 +198,8 @@ class SSHAgent(object):
         if response == SSHAgent.AGENT_FAILURE:
             return None
         assert response == SSHAgent.AGENT_SIGN_RESPONSE
+        _ = reader.long()    # signature length
+        _ = reader.string()  # signature format: ssh-dsa, ssh-rsa, ssh-ed25519
         signature = reader.string()
         return signature
 
@@ -240,6 +241,15 @@ class Cipher(object):
 
 
 class OpenSSLCipher(Cipher):
+    """
+    Using OpenSSL as a command line encryption tool is weaker than scrypt.  The
+    passphrase is hashed a few times but it's nothing like as complex as
+    scrypt's key derivation function.
+
+    However, the signatures ssh-agent are at least 128 bytes long, which is
+    roughly a 150 character password.
+    """
+
     def encrypt(self, reader, writer, passphrase):
         self._openssl('-e', reader, writer, passphrase)
 
@@ -387,7 +397,7 @@ class ShovelFile(object):
 
     @classmethod
     def encrypt(cls, reader, ssh, key, cipher):
-        nonce = hashlib.sha1(os.urandom(cls.NONCE_SIZE)).digest()
+        nonce = os.urandom(cls.NONCE_SIZE)
         flags = cls._signing_flags_for(key)
         signature = ssh.sign(key.blob, nonce, flags)
         passphrase = hashlib.sha1(signature).hexdigest()
@@ -701,12 +711,19 @@ class SSHAgentTest(unittest.TestCase):
         ssh = SSHAgent(self.ssh_fixture.socket_path)
         key = ssh.identities()[0]
         message = "Hello, world!"
-        expected_digest = "791c659db0f314126ff0226beaa25aa6b8c4f00e"
+        expected = (
+            '\x23\xe4\x80\x83\xfb\x29\xb3\xf2\x02\x6a\xce\xe8\x56\x65\x51\xf6'
+            '\x03\xe8\x45\x4f\x49\x3b\x32\x27\x7c\xcc\xaf\xa7\xbd\x27\x52\x8b'
+            '\x76\xc5\x30\xcf\xb0\x79\x55\xeb\x9a\xc7\xbd\x6b\x42\x20\xf1\xbc'
+            '\xae\x4c\x29\xfa\x8b\x2e\x9d\x94\x7c\x1f\xb8\x33\x1f\xd9\x89\x9f'
+            '\xd9\xac\x62\xce\x6b\x83\x9c\xc5\xbd\xe0\x95\xca\xc8\x76\xa0\xdd'
+            '\x94\xc5\x34\x73\xcf\x5e\x4d\xcb\x4d\xfc\x8d\x85\x72\xe2\x33\xc8'
+            '\xff\x82\xeb\xb3\x6a\xa8\xf4\xc6\x55\x6e\x76\x64\xd9\xfe\xc2\x67'
+            '\x39\x67\x92\xab\xd1\x2d\x74\x89\x13\x4a\x65\xa1\x46\xa8\x6a\xfa')
         flags = SSHAgent.SIGN_FLAG_NONE
         for _ in range(0, 3):
             signature = ssh.sign(key.blob, message, flags)
-            actual_digest = hashlib.sha1(signature).hexdigest()
-            self.assertEqual(expected_digest, actual_digest)
+            self.assertEqual(signature, expected)
 
     def tearDown(self):
         self.ssh_fixture.stop()
