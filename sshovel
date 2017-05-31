@@ -141,9 +141,11 @@ class SSHAgent(object):
     AGENT_IDENTITIES_ANSWER = 12
     AGENTC_SIGN_REQUEST = 13
     AGENT_SIGN_RESPONSE = 14
-    AGENT_RSA_SHA2_256 = 2
-    AGENT_RSA_SHA2_512 = 4
     AGENT_FAILURE = 5
+
+    SIGN_FLAG_NONE = 0
+    SIGN_FLAG_RSA_SHA2_256 = 2
+    SIGN_FLAG_RSA_SHA2_512 = 4
 
     def __init__(self, socket_path):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
@@ -171,7 +173,7 @@ class SSHAgent(object):
             result.append(key)
         return result
 
-    def sign(self, key_blob, message, flags=0):
+    def sign(self, key_blob, message, flags):
         self.sock.sendall(
             BinaryWriter()
             .byte(SSHAgent.AGENTC_SIGN_REQUEST)
@@ -375,7 +377,8 @@ class ShovelFile(object):
     @classmethod
     def encrypt(cls, reader, ssh, key, cipher):
         nonce = hashlib.sha1(os.urandom(cls.NONCE_SIZE)).digest()
-        signature = ssh.sign(key.blob, nonce)
+        flags = SSHAgent.SIGN_FLAG_NONE
+        signature = ssh.sign(key.blob, nonce, flags)
         passphrase = hashlib.sha1(signature).hexdigest()
         buf = io.BytesIO()
         cipher.encrypt(reader, buf, passphrase)
@@ -417,7 +420,8 @@ class ShovelFile(object):
         log('decrypting with {} and {}'.format(
             self.key.comment,
             self.cipher.name()))
-        signature = ssh.sign(self.key.blob, self.nonce)
+        flags = SSHAgent.SIGN_FLAG_NONE
+        signature = ssh.sign(self.key.blob, self.nonce, flags)
         if signature is None:
             raise UserException(
                 "file is encrypted with a key we don't have: {}".format(
@@ -696,8 +700,9 @@ class SSHAgentTest(unittest.TestCase):
         key = ssh.identities()[0]
         message = "Hello, world!"
         expected_digest = "791c659db0f314126ff0226beaa25aa6b8c4f00e"
+        flags = SSHAgent.SIGN_FLAG_NONE
         for _ in range(0, 3):
-            signature = ssh.sign(key.blob, message)
+            signature = ssh.sign(key.blob, message, flags)
             actual_digest = hashlib.sha1(signature).hexdigest()
             self.assertEqual(expected_digest, actual_digest)
 
