@@ -491,11 +491,8 @@ class Main(object):
         if not keys:
             raise UserException("ssh agent has no keys")
 
-        key = keys[0]
-        if args.key:
-            key = self.match_key(keys, args.key)
-
         if args.in_file == '-':
+            log("reading from stdin")
             args.in_file = '/dev/stdin'
 
         if args.out_file == '-':
@@ -505,12 +502,12 @@ class Main(object):
         reader = io.open(args.in_file, mode='rb', buffering=1024)
         writer = open(args.out_file, mode='wb')
 
-        if args.in_file == '/dev/stdin':
-            log("reading from stdin")
-
         if ShovelFile.is_shovel_file(reader):
             ShovelFile.load_from(reader).decrypt(writer, ssh)
         else:
+            key = keys[0]
+            if args.key:
+                key = self.match_key(keys, args.key)
             log("encrypting{} with ssh-key '{}' and {}".format(
                 (writer == sys.stdout and ' to stdout' or ''),
                 key.comment,
