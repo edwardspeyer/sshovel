@@ -125,12 +125,16 @@ class BinaryWriter(object):
         return self
 
 
+class SSHKey(object):
+    def __init__(self, blob, comment):
+        self.blob = blob
+        self.comment = comment
+
+
 class SSHAgent(object):
     """
     Interface to a running ssh-agent(1)
     """
-
-    Key = namedtuple('Key', 'blob comment')
 
     # https://tools.ietf.org/id/draft-miller-ssh-agent-00.html
     AGENTC_REQUEST_IDENTITIES = 11
@@ -163,7 +167,7 @@ class SSHAgent(object):
         for _ in range(num_keys):
             blob = reader.string()
             comment = reader.string()
-            key = SSHAgent.Key(blob, comment)
+            key = SSHKey(blob, comment)
             result.append(key)
         return result
 
@@ -386,7 +390,7 @@ class ShovelFile(object):
         key_blob = cls._read_header_base64(reader, 'Key')
         comment = cls._read_header_base64(reader, 'Comment')
         nonce = cls._read_header_base64(reader, 'Nonce')
-        key = SSHAgent.Key(key_blob, comment)
+        key = SSHKey(key_blob, comment)
         cipher = Cipher.instance_of(cipher_name)
         buf = io.BytesIO()
         base64.decode(reader, buf)
