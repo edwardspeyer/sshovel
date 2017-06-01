@@ -480,6 +480,30 @@ class ShovelHeader(object):
         return ShovelParams.from_header(ssh_agent, self)
 
 
+class Editor(object):
+    DEFAULT = 'nano'
+
+    @classmethod
+    def default(cls):
+        editor = os.environ.get('EDITOR', cls.DEFAULT)
+        return cls(editor)
+
+    def __init__(self, editor):
+        self.editor = editor
+
+    def edit(self, path):
+        command = [self.editor, path]
+        pid = os.fork()
+        if pid == 0:
+            os.execvp(command[0], command)
+        _, status = os.waitpid(pid, 0)
+        status = status >> 8
+        if status != 0:
+            raise UserException(
+                "error; editor %s exited with status %d" %
+                (self.editor, status))
+
+
 class Main(object):
     def __init__(self, args):
         signal.signal(signal.SIGQUIT, self._quit)
@@ -506,6 +530,10 @@ class Main(object):
         key = keys[0]
         if args.match_key_comment:
             key = self._match_key(keys, args.match_key_comment)
+
+        if args.edit:
+            path = args.edit
+            return self._edit(path, ssh_agent, key, cipher)
 
         in_file = args.in_file
         if in_file == '-':
@@ -539,7 +567,31 @@ class Main(object):
         unittest.main(argv=unittest_args)
 
     @staticmethod
+    def _edit(path, ssh_agent, key, cipher):
+        reader = io.open(path, mode='rb', buffering=1024)
+        tmp = tempfile.NamedTemporaryFile()
+        params = None
+        if ShovelHeader.is_shovel_file(reader):
+            tmp_file = tempfile.mkstemp()
+            params = ShovelParams.read_from(reader, ssh_agent)
+            params.decrypt(reader, tmp)
+        else:
+            params = ShovelParams.random(ssh_agent, key, cipher)
+            shutil.copyfileobj(reader, tmp)
+        tmp.flush()
+        editor = Editor.default()
+        editor.edit(tmp.name)
+        with open(tmp.name, 'rb') as reader:
+            with open(path, 'wb') as writer:
+                params.encrypt(reader, writer)
+
+    @staticmethod
     def _parse_args(args):
+        usage = '''\
+%(prog)s [--cipher CIPHER] [IN] [OUT]
+       %(prog)s --edit FILE
+'''
+
         epilogue = u"""\
 examples:
 
@@ -554,13 +606,18 @@ examples:
       Hello, world!
 
 
+  - Edit an encrypted file in place (or edit then encrypt, if it's plaintext):
+
+      $ sshovel --edit secrets
+
+
   - Use a specific agent key (only needed for encrypt):
 
       $ sshovel --key my_other_key
 \u00A0
 """
         parser = argparse.ArgumentParser(
-            usage='%(prog)s [--cipher CIPHER] [IN] [OUT]',
+            usage=usage,
             formatter_class=argparse.RawDescriptionHelpFormatter,
             description='Encrypt files with ssh-agent, bury your secrets',
             epilog=epilogue)
@@ -576,6 +633,10 @@ examples:
             metavar='TOOL',
             choices=Cipher.all_cipher_names(),
             help='encrypt with "scrypt" (default) or "openssl"')
+        parser.add_argument(
+            '--edit',
+            metavar='FILE',
+            help='decrypt, edit with $EDITOR, and re-encrypt')
         parser.add_argument(
             '--test',
             nargs='*',
@@ -620,26 +681,64 @@ examples:
                 .format(pattern, [k.comment for k in matches]))
 
 
+class EditorFixture(object):
+    SCRIPT = '''\
+#!/bin/sh
+exec /bin/echo -n DATA >> $1
+'''
+
+    def __init__(self):
+        tmp = tempfile.NamedTemporaryFile()
+        tmp.write(self.SCRIPT)
+        tmp.flush()
+        os.chmod(tmp.name, 0700)
+        self._tmp = tmp
+        self.path = tmp.name
+
+
 class MainTest(unittest.TestCase):
     message = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
     def setUp(self):
+        # ssh-agent
         self.ssh_fixture = SSHTestFixture()
         os.environ['SSH_AUTH_SOCK'] = self.ssh_fixture.socket_path
+        # $EDITOR
+        self.editor_fixture = EditorFixture()
+        os.environ['EDITOR'] = self.editor_fixture.path
+        # Some test files
+        self.tmps = [tempfile.mkstemp()[1] for _ in range(3)]
+        with open(self.tmps[0], 'w') as writer:
+            writer.write(self.message)
 
     def test_encrypt(self):
-        file0 = tempfile.NamedTemporaryFile()
-        file0.write(self.message)
-        file0.flush()
-        file1 = tempfile.NamedTemporaryFile()
-        file2 = tempfile.NamedTemporaryFile()
-        Main(['--cipher', 'openssl', file0.name, file1.name])
-        Main([file1.name, file2.name])
-        actual = file2.read()
-        self.assertEqual(self.message, actual)
+        tmp0, tmp1, tmp2 = self.tmps
+        Main(['--cipher', 'openssl', tmp0, tmp1])
+        self.assertEncrypted(tmp1)
+        Main([tmp1, tmp2])
+        self.assertFileContents(tmp2, self.message)
+
+    def test_edit(self):
+        tmp0, tmp1, _ = self.tmps
+        # Edit in place
+        Main(['--cipher', 'openssl', '--edit', tmp0])
+        self.assertEncrypted(tmp0)
+        # Decrypt
+        Main([tmp0, tmp1])
+        self.assertFileContents(tmp1, self.message + 'DATA')
+
+    def assertFileContents(self, path, expected):
+        with open(path, 'r') as reader:
+            self.assertEqual(reader.read(), expected)
+
+    def assertEncrypted(self, path):
+        with io.open(path, 'rb', buffering=1024) as reader:
+            self.assertTrue(ShovelHeader.is_shovel_file(reader))
 
     def tearDown(self):
         self.ssh_fixture.stop()
+        for path in self.tmps:
+            os.unlink(path)
 
 
 class BinaryWriterTest(unittest.TestCase):
