@@ -545,18 +545,18 @@ examples:
 
   - Default is to use scrypt(1) to encrypt:
 
-      $ shovel message.txt message.txt.enc
+      $ sshovel message.txt message.txt.enc
 
 
   - If the input is encrypted, then the default action is to decrypt:
 
-      $ shovel message.txt.enc
+      $ sshovel message.txt.enc
       Hello, world!
 
 
   - Use a specific agent key (only needed for encrypt):
 
-      $ shovel --key my_other_key
+      $ sshovel --key my_other_key
 \u00A0
 """
         parser = argparse.ArgumentParser(
