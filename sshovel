@@ -379,36 +379,77 @@ class ScryptCipher(Cipher):
         exp.finish()
 
 
-class ShovelFile(object):
-    """
-    Wrapper around a Cipher that uses an ssh-agent(1) to generate the
-    cipher's passphrase.
-    """
-
-    MAGIC = "HAZ.CAT/SSHOVEL"
-    VERSION = 8
+class ShovelParams(object):
     NONCE_SIZE = 1024
+
+    @classmethod
+    def random(cls, ssh_agent, key, cipher):
+        nonce = os.urandom(cls.NONCE_SIZE)
+        return cls(ssh_agent, key, cipher, nonce)
+
+    @classmethod
+    def read_from(cls, reader, ssh_agent):
+        header = ShovelHeader.read_from(reader)
+        key = cls._find_key(ssh_agent, header.nonce, header.key_hash)
+        cipher = Cipher.instance_of(header.cipher_name)
+        return cls(ssh_agent, key, cipher, header.nonce)
+
+    def __init__(self, ssh_agent, key, cipher, nonce):
+        self.ssh_agent = ssh_agent
+        self.key = key
+        self.cipher = cipher
+        self.nonce = nonce
+
+    def encrypt(self, reader, writer):
+        writer.write(str(self._header()))
+        self.cipher.encrypt(reader, writer, self._passphrase())
+        return writer
+
+    def decrypt(self, reader, writer):
+        self.cipher.decrypt(reader, writer, self._passphrase())
+        return writer
+
+    def _header(self):
+        return ShovelHeader(
+            self.cipher.name(),
+            self.nonce,
+            self._create_key_hash(self.nonce, self.key))
+
+    def _passphrase(self):
+        flags = SSHAgent.SIGN_FLAG_NONE
+        if self.key.is_rsa():
+            flags = SSHAgent.SIGN_FLAG_RSA_SHA2_512
+        signature = self.ssh_agent.sign(self.key.blob, self.nonce, flags)
+        if signature is None:
+            raise UserException("agent is missing key '%s'" % self.key.comment)
+        return hashlib.sha1(signature).hexdigest()
+
+    @classmethod
+    def _find_key(cls, ssh_agent, nonce, key_hash):
+        for key in ssh_agent.identities():
+            if cls._create_key_hash(nonce, key) == key_hash:
+                return key
+        raise UserException("agent doesn't have the required key")
+
+    @staticmethod
+    def _create_key_hash(nonce, key):
+        return hashlib.sha1(nonce + key.blob).digest()
+
+
+
+class ShovelHeader(object):
+    MAGIC = "HAZ.CAT/SSHOVEL"
+    VERSION = 5807
 
     @classmethod
     def is_shovel_file(cls, reader):
         length = len(cls.MAGIC)
-        magic = reader.peek(length)[0:length]
-        return magic == cls.MAGIC
+        block = reader.peek(length)
+        actual = block[0:length]
+        return actual == cls.MAGIC
 
     @classmethod
-    def encrypt(cls, reader, ssh_agent, key, cipher):
-        nonce = os.urandom(cls.NONCE_SIZE)
-        flags = cls._signing_flags_for(key)
-        signature = ssh_agent.sign(key.blob, nonce, flags)
-        key_hash = hashlib.sha1(nonce + key.blob).digest()
-        passphrase = hashlib.sha1(signature).hexdigest()
-        buf = io.BytesIO()
-        cipher.encrypt(reader, buf, passphrase)
-        buf.seek(0)
-        return cls(cipher, nonce, key_hash, buf)
-
-    @classmethod
-    def load_from(cls, reader):
+    def read_from(cls, reader):
         magic = reader.read(len(cls.MAGIC))
         assert magic == cls.MAGIC
         header = BinaryReader(reader.read)
@@ -419,51 +460,24 @@ class ShovelFile(object):
         num_key_hashes = header.long()
         assert num_key_hashes == 1
         key_hash = header.string()
-        cipher = Cipher.instance_of(cipher_name)
-        return cls(cipher, nonce, key_hash, reader)
+        return cls(cipher_name, nonce, key_hash)
 
-    def __init__(self, cipher, nonce, key_hash, encrypted_file):
-        self.cipher = cipher
+    def __init__(self, cipher_name, nonce, key_hash):
+        self.cipher_name = cipher_name
         self.nonce = nonce
         self.key_hash = key_hash
-        self.encrypted_file = encrypted_file
 
-    def save_to(self, writer):
-        writer.write(self.MAGIC)
+    def __str__(self):
         header = BinaryWriter()
         header.long(self.VERSION)
-        header.string(self.cipher.name())
+        header.string(self.cipher_name)
         header.string(self.nonce)
         header.long(1)
         header.string(self.key_hash)
-        writer.write(str(header))
-        shutil.copyfileobj(self.encrypted_file, writer)
+        return '%s%s' % (self.MAGIC, header)
 
-    def decrypt(self, writer, ssh_agent):
-        key = self._find_key(ssh_agent)
-        log('decrypting with {} and {}'.format(
-            key.comment,
-            self.cipher.name()))
-        flags = self._signing_flags_for(key)
-        signature = ssh_agent.sign(key.blob, self.nonce, flags)
-        passphrase = hashlib.sha1(signature).hexdigest()
-        self.cipher.decrypt(self.encrypted_file, writer, passphrase)
-
-    def _find_key(self, ssh_agent):
-        for candidate_key in ssh_agent.identities():
-            key_hash = hashlib.sha1(self.nonce + candidate_key.blob).digest()
-            if key_hash == self.key_hash:
-                return candidate_key
-        raise UserException(
-            "file is encrypted with a key we don't have")
-
-    @staticmethod
-    def _signing_flags_for(key):
-        if key.is_rsa():
-            # Use SHA2 when available:
-            # https://crypto.stackexchange.com/questions/15051/
-            return SSHAgent.SIGN_FLAG_RSA_SHA2_512
-        return SSHAgent.SIGN_FLAG_NONE
+    def params(self, ssh_agent):
+        return ShovelParams.from_header(ssh_agent, self)
 
 
 class Main(object):
@@ -502,8 +516,8 @@ class Main(object):
         reader = io.open(args.in_file, mode='rb', buffering=1024)
         writer = open(args.out_file, mode='wb')
 
-        if ShovelFile.is_shovel_file(reader):
-            ShovelFile.load_from(reader).decrypt(writer, ssh_agent)
+        if ShovelHeader.is_shovel_file(reader):
+            ShovelParams.read_from(reader, ssh_agent).decrypt(reader, writer)
         else:
             key = keys[0]
             if args.key:
@@ -512,7 +526,7 @@ class Main(object):
                 (writer == sys.stdout and ' to stdout' or ''),
                 key.comment,
                 args.cipher))
-            ShovelFile.encrypt(reader, ssh_agent, key, cipher).save_to(writer)
+            ShovelParams.random(ssh_agent, key, cipher).encrypt(reader, writer)
 
     @staticmethod
     def _quit(*args):
@@ -773,7 +787,7 @@ class ScryptCipherTest(CipherTest):
         self.assert_decrypt(cipher, ciphertext, passphrase)
 
 
-class ShovelFileTest(CipherTest):
+class ShovelTest(CipherTest):
     def setUp(self):
         self.fixture = SSHTestFixture()
 
@@ -785,25 +799,36 @@ class ShovelFileTest(CipherTest):
         key = ssh_agent.identities()[0]
         message = "Hello, world!!!!1"
         cipher = OpenSSLCipher()
+
+        # Encrypt
         src = io.BytesIO(message)
-        shovel_file = ShovelFile.encrypt(src, ssh_agent, key, cipher)
         dst = io.BytesIO()
-        shovel_file.decrypt(dst, ssh_agent)
-        self.assertEqual(message, dst.getvalue())
+        ShovelParams.random(ssh_agent, key, cipher).encrypt(src, dst)
+        ciphertext = dst.getvalue()
+
+        # Decrypt
+        dst.seek(0)
+        src = dst
+        dst = io.BytesIO()
+        ShovelParams.read_from(src, ssh_agent).decrypt(src, dst)
+
+        plaintext = dst.getvalue()
+        self.assertEqual(plaintext, message)
 
     def test_missing_keys(self):
         ssh_agent = SSHAgent(self.fixture.socket_path)
         key = ssh_agent.identities()[0]
         cipher = OpenSSLCipher()
-        shovel_file = ShovelFile.encrypt(io.BytesIO(), ssh_agent, key, cipher)
+        params = ShovelParams.random(ssh_agent, key, cipher)
+        dst = params.encrypt(io.BytesIO(), io.BytesIO())
         self.fixture.delete_keys()
         ex = None
         try:
-            shovel_file.decrypt(io.BytesIO(), ssh_agent)
+            params.decrypt(dst, io.BytesIO())
         except UserException as ex:
             pass
         self.assertIsNotNone(ex)
-        self.assertTrue("key we don't have" in str(ex))
+        self.assertTrue("missing key" in str(ex))
 
 
 Main(sys.argv[1:])
