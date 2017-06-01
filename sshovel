@@ -483,7 +483,7 @@ class ShovelHeader(object):
 class Main(object):
     def __init__(self, args):
         signal.signal(signal.SIGQUIT, self._quit)
-        args = self.parse_args(args)
+        args = self._parse_args(args)
         try:
             self._main(args)
         except UserException as ex:
@@ -495,37 +495,36 @@ class Main(object):
 
     def _main(self, args):
         if args.test is not None:
-            unittest_args = [__file__]
-            unittest_args.extend(args.test)
-            unittest.main(argv=unittest_args)
+            self._test(args.test)
 
+        ssh_agent = self._find_agent()
         cipher = Cipher.instance_of(args.cipher)
-        ssh_agent = self.find_agent()
         keys = ssh_agent.identities()
         if not keys:
             raise UserException("ssh agent has no keys")
 
-        if args.in_file == '-':
-            log("reading from stdin")
-            args.in_file = '/dev/stdin'
+        key = keys[0]
+        if args.match_key_comment:
+            key = self._match_key(keys, args.match_key_comment)
 
-        if args.out_file == '-':
-            args.out_file = '/dev/stdout'
+        in_file = args.in_file
+        if in_file == '-':
+            log("reading from stdin")
+            in_file = '/dev/stdin'
+
+        out_file = args.out_file
+        if out_file == '-':
+            out_file = '/dev/stdout'
 
         # io.open's buffering gives us peek()
-        reader = io.open(args.in_file, mode='rb', buffering=1024)
-        writer = open(args.out_file, mode='wb')
+        reader = io.open(in_file, mode='rb', buffering=1024)
+        writer = open(out_file, mode='wb')
 
         if ShovelHeader.is_shovel_file(reader):
             ShovelParams.read_from(reader, ssh_agent).decrypt(reader, writer)
         else:
-            key = keys[0]
-            if args.key:
-                key = self.match_key(keys, args.key)
-            log("encrypting{} with ssh-key '{}' and {}".format(
-                (writer == sys.stdout and ' to stdout' or ''),
-                key.comment,
-                args.cipher))
+            log("encrypting with ssh-key '{}' and {}".format(
+                key.comment, cipher.name()))
             ShovelParams.random(ssh_agent, key, cipher).encrypt(reader, writer)
 
     @staticmethod
@@ -534,7 +533,13 @@ class Main(object):
         raise KeyboardInterrupt()
 
     @staticmethod
-    def parse_args(args):
+    def _test(test_args):
+        unittest_args = [__file__]
+        unittest_args.extend(test_args)
+        unittest.main(argv=unittest_args)
+
+    @staticmethod
+    def _parse_args(args):
         epilogue = u"""\
 examples:
 
@@ -562,6 +567,7 @@ examples:
         parser.add_argument(
             '--key',
             metavar='MATCH',
+            dest='match_key_comment',
             help='use the ssh key whose comment matches MATCH')
         parser.add_argument(
             '--cipher',
@@ -590,14 +596,14 @@ examples:
         return parser.parse_args(args)
 
     @staticmethod
-    def find_agent():
+    def _find_agent():
         socket_path = os.environ.get('SSH_AUTH_SOCK')
         if socket_path == "":
             raise UserException("SSH_AUTH_SOCK is empty or unset")
         return SSHAgent(socket_path)
 
     @staticmethod
-    def match_key(keys, pattern):
+    def _match_key(keys, pattern):
         matches = []
         for candidate in keys:
             if pattern in candidate.comment:
