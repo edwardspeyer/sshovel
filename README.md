@@ -23,7 +23,8 @@ sshovel: new file, no decryption needed!
 sshovel: encrypting with SHA256:ypIkIqg6YZAiYrCKzxaFYAtuEpfu5vAlKFN22+lxHic "/tmp/key" and scrypt
 ```
 
-Comprehensive documentation is available, and the best part?  It's *completely free*!
+Usage
+-----
 
 ```
 $ sshovel --help
