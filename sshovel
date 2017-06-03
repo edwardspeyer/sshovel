@@ -38,6 +38,7 @@ TODO:
 # pylint: disable=missing-docstring
 
 import argparse
+import base64
 import fcntl
 import hashlib
 import io
@@ -129,17 +130,35 @@ class SSHKey(object):
     ALGORITHM_RSA = 'ssh-rsa'
 
     @classmethod
-    def parse(cls, blob, comment):
+    def read(cls, reader, fingerprinter):
+        blob = reader.string()
+        comment = reader.string()
         algorithm = BinaryReader.from_string(blob).string()
-        return cls(algorithm, blob, comment)
+        fingerprint = fingerprinter(blob)
+        return cls(blob, comment, algorithm, fingerprint)
 
-    def __init__(self, algorithm, blob, comment):
-        self.algorithm = algorithm
+    def __init__(self, blob, comment, algorithm, fingerprint):
         self.blob = blob
         self.comment = comment
+        self.algorithm = algorithm
+        self.fingerprint = fingerprint
+
+    def __str__(self):
+        return '%s "%s"' % (self.fingerprint, self.comment)
 
     def is_rsa(self):
         return self.algorithm == self.ALGORITHM_RSA
+
+    @staticmethod
+    def fingerprint_md5(blob):
+        digest = hashlib.md5(blob).hexdigest()
+        pairs = re.findall('(..)', digest)
+        return 'MD5:' + ':'.join(pairs)
+
+    @staticmethod
+    def fingerprint_sha256(blob):
+        digest = hashlib.sha256(blob).digest()
+        return 'SHA256:' + base64.b64encode(digest).rstrip('=')
 
 
 class SSHAgent(object):
@@ -158,8 +177,9 @@ class SSHAgent(object):
     SIGN_FLAG_RSA_SHA2_256 = 2
     SIGN_FLAG_RSA_SHA2_512 = 4
 
-    def __init__(self, socket_path):
+    def __init__(self, socket_path, fingerprinter=SSHKey.fingerprint_sha256):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+        self.fingerprinter = fingerprinter
         try:
             self.sock.connect(socket_path)
         except IOError as ex:
@@ -178,9 +198,7 @@ class SSHAgent(object):
         num_keys = reader.long()
         result = []
         for _ in range(num_keys):
-            blob = reader.string()
-            comment = reader.string()
-            key = SSHKey.parse(blob, comment)
+            key = SSHKey.read(reader, self.fingerprinter)
             result.append(key)
         return result
 
@@ -521,7 +539,7 @@ class Main(object):
         if args.test is not None:
             self._test(args.test)
 
-        ssh_agent = self._find_agent()
+        ssh_agent = self._find_agent(args.fingerprinter_name)
         cipher = Cipher.instance_of(args.cipher)
         keys = ssh_agent.identities()
         if not keys:
@@ -634,6 +652,13 @@ examples:
             choices=Cipher.all_cipher_names(),
             help='encrypt with "scrypt" (default) or "openssl"')
         parser.add_argument(
+            '--fingerprint-hash',
+            dest='fingerprinter_name',
+            default='sha256',
+            metavar='HASH',
+            choices=('md5', 'sha256'),
+            help='algorithm used to display fingerprints')
+        parser.add_argument(
             '--edit',
             metavar='FILE',
             help='decrypt, edit with $EDITOR, and re-encrypt')
@@ -657,11 +682,19 @@ examples:
         return parser.parse_args(args)
 
     @staticmethod
-    def _find_agent():
+    def _find_agent(fingerprinter_name):
+        fingerprinter = None
+        if fingerprinter_name == 'md5':
+            fingerprinter = SSHKey.fingerprint_md5
+        elif fingerprinter_name == 'sha256':
+            fingerprinter = SSHKey.fingerprint_sha256
+        else:
+            raise UserException(
+                'unknown fingerprint hash "%s"' % fingerprinter_name)
         socket_path = os.environ.get('SSH_AUTH_SOCK')
         if socket_path == "":
             raise UserException("SSH_AUTH_SOCK is empty or unset")
-        return SSHAgent(socket_path)
+        return SSHAgent(socket_path, fingerprinter)
 
     @staticmethod
     def _match_key(keys, pattern):
