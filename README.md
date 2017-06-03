@@ -73,9 +73,9 @@ and the body decrypted.
 The ssh-agent functions that sshovel uses are:
 
 - *[REQUEST_IDENTITIES()][IETF44]*
-  
+
   Get a list of public-keys in the agent.
-  
+
 - *[SIGN_REQUEST(public-key, data)][IETF45]*
 
   Sign `data` with the private key corresponding to `public-key`.
