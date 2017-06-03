@@ -240,6 +240,9 @@ class Cipher(object):
     def name(self):
         return Cipher.name_of(self.__class__)
 
+    def __str__(self):
+        return self.name()
+
     @staticmethod
     def name_of(a_cls):
         return a_cls.__name__.lower().replace('cipher', '')
@@ -420,10 +423,12 @@ class ShovelParams(object):
 
     def encrypt(self, reader, writer):
         writer.write(str(self._header()))
+        log('encrypting with %s and %s' % (self.key, self.cipher))
         self.cipher.encrypt(reader, writer, self._passphrase())
         return writer
 
     def decrypt(self, reader, writer):
+        log('decrypting with %s and %s' % (self.key, self.cipher))
         self.cipher.decrypt(reader, writer, self._passphrase())
         return writer
 
@@ -569,8 +574,6 @@ class Main(object):
         if ShovelHeader.is_shovel_file(reader):
             ShovelParams.read_from(reader, ssh_agent).decrypt(reader, writer)
         else:
-            log("encrypting with ssh-key '{}' and {}".format(
-                key.comment, cipher.name()))
             ShovelParams.random(ssh_agent, key, cipher).encrypt(reader, writer)
 
     @staticmethod
