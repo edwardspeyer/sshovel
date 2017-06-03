@@ -35,7 +35,7 @@ TODO:
 - Test with multiple ssh keys.
 
 """
-# pylint: disable=missing-docstring
+# pylint: disable=missing-docstring,too-many-lines
 
 import argparse
 import base64
@@ -585,7 +585,7 @@ class Main(object):
 
     @staticmethod
     def _test(test_args):
-        unittest_args = [__file__]
+        unittest_args = [__file__, '--quiet']
         unittest_args.extend(test_args)
         unittest.main(argv=unittest_args)
 
@@ -974,6 +974,23 @@ class ShovelTest(CipherTest):
             pass
         self.assertIsNotNone(ex)
         self.assertTrue("missing key" in str(ex))
+
+
+class LintTest(unittest.TestCase):
+    def test_pep8(self):
+        self._lint_with('pep8')
+
+    def test_pylint(self):
+        self._lint_with('pylint', '-f', 'parseable')
+
+    @staticmethod
+    def _lint_with(*command):
+        command = list(command)
+        command.append(__file__)
+        try:
+            subprocess.check_call(command)
+        except OSError:
+            pass
 
 
 Main(sys.argv[1:])
