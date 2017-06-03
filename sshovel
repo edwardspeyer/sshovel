@@ -394,7 +394,7 @@ class ScryptCipher(Cipher):
 
 class ShovelParameters(object):
     """
-    ShovelParameters wraps a everything required to encrypt or decrypt a
+    ShovelParameters wraps everything required to encrypt or decrypt a
     sshovel file:
 
         - connection to an agent
