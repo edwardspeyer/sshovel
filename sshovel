@@ -641,8 +641,9 @@ examples:
   - Use a specific agent key (only needed for encrypt):
 
       $ sshovel --key my_other_key
-\u00A0
-"""
+\t
+""" # <- The tab is needed to force a blank line at the end of the epilogue.
+
         parser = argparse.ArgumentParser(
             usage=usage,
             formatter_class=argparse.RawDescriptionHelpFormatter,
