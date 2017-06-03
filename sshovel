@@ -567,8 +567,11 @@ class Main(object):
             out_file = '/dev/stdout'
 
         # io.open's buffering gives us peek()
-        reader = io.open(in_file, mode='rb', buffering=1024)
-        writer = open(out_file, mode='wb')
+        try:
+            reader = io.open(in_file, mode='rb', buffering=1024)
+            writer = open(out_file, mode='wb')
+        except IOError as ex:
+            raise UserException(ex)
 
         if ShovelHeader.is_shovel_file(reader):
             ShovelParams.read_from(reader, ssh_agent).decrypt(reader, writer)
