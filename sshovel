@@ -459,7 +459,6 @@ class ShovelParams(object):
         return hashlib.sha1(nonce + key.blob).digest()
 
 
-
 class ShovelHeader(object):
     MAGIC = "HAZ.CAT/SSHOVEL"
     VERSION = 5807
@@ -499,9 +498,6 @@ class ShovelHeader(object):
         header.string(self.key_hash)
         return '%s%s' % (self.MAGIC, header)
 
-    def params(self, ssh_agent):
-        return ShovelParams.from_header(ssh_agent, self)
-
 
 class Editor(object):
     DEFAULT = 'nano'
@@ -528,6 +524,9 @@ class Editor(object):
 
 
 class Main(object):
+    # This class keeps methods in one place; it's not really a class!
+    # pylint: disable=too-few-public-methods
+
     def __init__(self, args):
         signal.signal(signal.SIGQUIT, self._quit)
         args = self._parse_args(args)
@@ -594,7 +593,6 @@ class Main(object):
         if os.path.exists(path):
             reader = io.open(path, mode='rb', buffering=1024)
             if ShovelHeader.is_shovel_file(reader):
-                tmp_file = tempfile.mkstemp()
                 params = ShovelParams.read_from(reader, ssh_agent)
                 params.decrypt(reader, tmp)
             else:
@@ -642,7 +640,7 @@ examples:
 
       $ sshovel --key my_other_key
 \t
-""" # <- The tab is needed to force a blank line at the end of the epilogue.
+"""  # <- The tab is needed to force a blank line at the end of the epilogue.
 
         parser = argparse.ArgumentParser(
             usage=usage,
@@ -727,21 +725,6 @@ examples:
                 .format(pattern, [k.comment for k in matches]))
 
 
-class EditorFixture(object):
-    SCRIPT = '''\
-#!/bin/sh
-exec /bin/echo -n DATA >> $1
-'''
-
-    def __init__(self):
-        tmp = tempfile.NamedTemporaryFile()
-        tmp.write(self.SCRIPT)
-        tmp.flush()
-        os.chmod(tmp.name, 0700)
-        self._tmp = tmp
-        self.path = tmp.name
-
-
 class MainTest(unittest.TestCase):
     message = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
@@ -750,8 +733,8 @@ class MainTest(unittest.TestCase):
         self.ssh_fixture = SSHTestFixture()
         os.environ['SSH_AUTH_SOCK'] = self.ssh_fixture.socket_path
         # $EDITOR
-        self.editor_fixture = EditorFixture()
-        os.environ['EDITOR'] = self.editor_fixture.path
+        self.editor_tmp = self.fake_editor()
+        os.environ['EDITOR'] = self.editor_tmp.name
         # Some test files
         self.tmps = [tempfile.mkstemp()[1] for _ in range(3)]
         with open(self.tmps[0], 'w') as writer:
@@ -760,24 +743,24 @@ class MainTest(unittest.TestCase):
     def test_encrypt(self):
         tmp0, tmp1, tmp2 = self.tmps
         Main(['--cipher', 'openssl', tmp0, tmp1])
-        self.assertEncrypted(tmp1)
+        self.assert_encrypted(tmp1)
         Main([tmp1, tmp2])
-        self.assertFileContents(tmp2, self.message)
+        self.assert_file_contents(tmp2, self.message)
 
     def test_edit(self):
         tmp0, tmp1, _ = self.tmps
         # Edit in place
         Main(['--cipher', 'openssl', '--edit', tmp0])
-        self.assertEncrypted(tmp0)
+        self.assert_encrypted(tmp0)
         # Decrypt
         Main([tmp0, tmp1])
-        self.assertFileContents(tmp1, self.message + 'DATA')
+        self.assert_file_contents(tmp1, self.message + 'DATA')
 
-    def assertFileContents(self, path, expected):
+    def assert_file_contents(self, path, expected):
         with open(path, 'r') as reader:
             self.assertEqual(reader.read(), expected)
 
-    def assertEncrypted(self, path):
+    def assert_encrypted(self, path):
         with io.open(path, 'rb', buffering=1024) as reader:
             self.assertTrue(ShovelHeader.is_shovel_file(reader))
 
@@ -785,6 +768,15 @@ class MainTest(unittest.TestCase):
         self.ssh_fixture.stop()
         for path in self.tmps:
             os.unlink(path)
+
+    @staticmethod
+    def fake_editor():
+        script = "#!/bin/sh\nexec /bin/echo -n DATA >> $1\n"
+        tmp = tempfile.NamedTemporaryFile()
+        tmp.write(script)
+        tmp.flush()
+        os.chmod(tmp.name, 0700)
+        return tmp
 
 
 class BinaryWriterTest(unittest.TestCase):
@@ -955,7 +947,6 @@ class ShovelTest(CipherTest):
         src = io.BytesIO(message)
         dst = io.BytesIO()
         ShovelParams.random(ssh_agent, key, cipher).encrypt(src, dst)
-        ciphertext = dst.getvalue()
 
         # Decrypt
         dst.seek(0)
