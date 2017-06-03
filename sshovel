@@ -656,10 +656,13 @@ examples:
         parser.add_argument(
             '--cipher',
             dest='cipher',
-            default='scrypt',
+            default=os.environ.get('SSHOVEL_CIPHER', 'scrypt'),
             metavar='TOOL',
             choices=Cipher.all_cipher_names(),
-            help='encrypt with "scrypt" (default) or "openssl"')
+            help=(
+                'encrypt with "scrypt" or "openssl" '
+                '(this can also be set in the environment '
+                'with SSHOVEL_CIPHER)'))
         parser.add_argument(
             '--fingerprint-hash',
             dest='fingerprinter_name',
