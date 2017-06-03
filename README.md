@@ -5,13 +5,21 @@ Encrypt files with `ssh-agent`, bury your secrets.
 
 ```
 $ sshovel message.txt message.txt.enc
-sshovel: encrypting with ssh-key '/tmp/key' and scrypt
+sshovel: encrypting with SHA256:ypIkIqg6YZAiYrCKzxaFYAtuEpfu5vAlKFN22+lxHic "/tmp/key" and scrypt
 sshovel: waiting for scrypt...
 
 $ sshovel message.txt.enc | mocking-spongebob
-sshovel: decrypting with /tmp/key and scrypt
+sshovel: decrypting with SHA256:ypIkIqg6YZAiYrCKzxaFYAtuEpfu5vAlKFN22+lxHic "/tmp/key" and scrypt
 sshovel: waiting for scrypt...
 hElLo, WoRld!
+```
+
+Edit encrypted files, even if they aren't already encrypted, or don't even exist!
+
+```
+$ sshovel --edit IEXPLORE.EXE
+sshovel: new file, no decryption needed!
+sshovel: encrypting with SHA256:ypIkIqg6YZAiYrCKzxaFYAtuEpfu5vAlKFN22+lxHic "/tmp/key" and scrypt
 ```
 
 Warning!
