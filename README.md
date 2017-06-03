@@ -19,7 +19,53 @@ Edit encrypted files, even if they aren't already encrypted, or don't even exist
 ```
 $ sshovel --edit IEXPLORE.EXE
 sshovel: new file, no decryption needed!
+...
 sshovel: encrypting with SHA256:ypIkIqg6YZAiYrCKzxaFYAtuEpfu5vAlKFN22+lxHic "/tmp/key" and scrypt
+```
+
+Comprehensive documentation is available, and the best part?  It's *completely free*!
+
+```
+$ sshovel --help
+usage: sshovel [--cipher CIPHER] [IN] [OUT]
+       sshovel --edit FILE
+
+Encrypt files with ssh-agent, bury your secrets
+
+positional arguments:
+  IN                    optional path, or "-" for stdin, which is the default
+  OUT                   as above, with stdout as the default
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --key MATCH           use the ssh key whose comment matches MATCH
+  --cipher TOOL         encrypt with "scrypt" or "openssl" (this can also be
+                        set in the environment with SSHOVEL_CIPHER)
+  --fingerprint-hash HASH
+                        algorithm used to display fingerprints
+  --edit FILE           decrypt, edit with $EDITOR, and re-encrypt
+  --test [ARGS [ARGS ...]]
+                        run the test suite
+
+examples:
+
+  - Default is to use scrypt(1) to encrypt:
+
+      $ sshovel message.txt message.txt.enc
+
+  - If the input is encrypted, then the default action is to decrypt:
+
+      $ sshovel message.txt.enc
+      Hello, world!
+
+  - Edit an encrypted file in place (or edit then encrypt, if it's plaintext):
+
+      $ sshovel --edit secrets
+
+  - Use a specific agent key (only needed for encrypt):
+
+      $ sshovel --key my_other_key
+
 ```
 
 Warning!
