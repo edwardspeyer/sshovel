@@ -589,22 +589,28 @@ class Main(object):
 
     @staticmethod
     def _edit(path, ssh_agent, key, cipher):
-        reader = io.open(path, mode='rb', buffering=1024)
         tmp = tempfile.NamedTemporaryFile()
         params = None
-        if ShovelHeader.is_shovel_file(reader):
-            tmp_file = tempfile.mkstemp()
-            params = ShovelParams.read_from(reader, ssh_agent)
-            params.decrypt(reader, tmp)
+        if os.path.exists(path):
+            reader = io.open(path, mode='rb', buffering=1024)
+            if ShovelHeader.is_shovel_file(reader):
+                tmp_file = tempfile.mkstemp()
+                params = ShovelParams.read_from(reader, ssh_agent)
+                params.decrypt(reader, tmp)
+            else:
+                shutil.copyfileobj(reader, tmp)
+            tmp.flush()
         else:
+            log('new file, no decryption needed!')
+            time.sleep(0.700)
+
+        if params is None:
             params = ShovelParams.random(ssh_agent, key, cipher)
-            shutil.copyfileobj(reader, tmp)
-        tmp.flush()
+
         editor = Editor.default()
         editor.edit(tmp.name)
-        with open(tmp.name, 'rb') as reader:
-            with open(path, 'wb') as writer:
-                params.encrypt(reader, writer)
+        with open(tmp.name, 'rb') as reader, open(path, 'wb') as writer:
+            params.encrypt(reader, writer)
 
     @staticmethod
     def _parse_args(args):
