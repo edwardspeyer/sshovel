@@ -400,7 +400,20 @@ class ScryptCipher(Cipher):
         exp.finish()
 
 
-class ShovelParams(object):
+class ShovelParameters(object):
+    """
+    ShovelParameters wraps a everything required to encrypt or decrypt a
+    sshovel file:
+
+        - connection to an agent
+        - an ssh-key
+        - a nonce used to generate a password
+        - an underlying instance of Cipher
+
+    You can either make a new one with random data, or parse a stream
+    containing an existing sshovel file.
+    """
+
     NONCE_SIZE = 1024
 
     @classmethod
@@ -460,6 +473,10 @@ class ShovelParams(object):
 
 
 class ShovelHeader(object):
+    """
+    Serialize and deserialize sshovel parameters from a stream.
+    """
+
     MAGIC = "HAZ.CAT/SSHOVEL"
     VERSION = 5807
 
@@ -574,9 +591,13 @@ class Main(object):
             raise UserException(ex)
 
         if ShovelHeader.is_shovel_file(reader):
-            ShovelParams.read_from(reader, ssh_agent).decrypt(reader, writer)
+            (ShovelParameters
+             .read_from(reader, ssh_agent)
+             .decrypt(reader, writer))
         else:
-            ShovelParams.random(ssh_agent, key, cipher).encrypt(reader, writer)
+            (ShovelParameters
+             .random(ssh_agent, key, cipher)
+             .encrypt(reader, writer))
 
     @staticmethod
     def _quit(*args):
@@ -596,7 +617,7 @@ class Main(object):
         if os.path.exists(path):
             reader = io.open(path, mode='rb', buffering=1024)
             if ShovelHeader.is_shovel_file(reader):
-                params = ShovelParams.read_from(reader, ssh_agent)
+                params = ShovelParameters.read_from(reader, ssh_agent)
                 params.decrypt(reader, tmp)
             else:
                 shutil.copyfileobj(reader, tmp)
@@ -606,7 +627,7 @@ class Main(object):
             time.sleep(0.700)
 
         if params is None:
-            params = ShovelParams.random(ssh_agent, key, cipher)
+            params = ShovelParameters.random(ssh_agent, key, cipher)
 
         editor = Editor.default()
         editor.edit(tmp.name)
@@ -949,13 +970,13 @@ class ShovelTest(CipherTest):
         # Encrypt
         src = io.BytesIO(message)
         dst = io.BytesIO()
-        ShovelParams.random(ssh_agent, key, cipher).encrypt(src, dst)
+        ShovelParameters.random(ssh_agent, key, cipher).encrypt(src, dst)
 
         # Decrypt
         dst.seek(0)
         src = dst
         dst = io.BytesIO()
-        ShovelParams.read_from(src, ssh_agent).decrypt(src, dst)
+        ShovelParameters.read_from(src, ssh_agent).decrypt(src, dst)
 
         plaintext = dst.getvalue()
         self.assertEqual(plaintext, message)
@@ -964,7 +985,7 @@ class ShovelTest(CipherTest):
         ssh_agent = SSHAgent(self.fixture.socket_path)
         key = ssh_agent.identities()[0]
         cipher = OpenSSLCipher()
-        params = ShovelParams.random(ssh_agent, key, cipher)
+        params = ShovelParameters.random(ssh_agent, key, cipher)
         dst = params.encrypt(io.BytesIO(), io.BytesIO())
         self.fixture.delete_keys()
         ex = None
