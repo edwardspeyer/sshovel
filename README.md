@@ -17,7 +17,7 @@ hElLo, WoRld!
 Edit encrypted files, even if they aren't already encrypted, or don't even exist!
 
 ```
-$ sshovel --edit IEXPLORE.EXE
+$ sshovel --edit my-secret-file
 sshovel: new file, no decryption needed!
 ...
 sshovel: encrypting with SHA256:ypIkIqg6YZAiYrCKzxaFYAtuEpfu5vAlKFN22+lxHic "/tmp/key" and scrypt
