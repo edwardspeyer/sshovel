@@ -605,27 +605,34 @@ class Main(object):
 
     @staticmethod
     def _edit(path, ssh_agent, key, cipher):
-        tmp = tempfile.NamedTemporaryFile()
-        params = None
-        if os.path.exists(path):
-            reader = io.open(path, mode='rb', buffering=1024)
-            if ShovelHeader.is_shovel_file(reader):
-                params = ShovelParameters.read_from(reader, ssh_agent)
-                params.decrypt(reader, tmp)
+        tmp_dir = tempfile.mkdtemp()
+        tmp = os.path.join(tmp_dir, os.path.basename(path))
+        try:
+            params = None
+            if os.path.exists(path):
+                with io.open(path, mode='rb', buffering=1024) as reader, \
+                        io.open(tmp, mode='wb') as writer:
+                    if ShovelHeader.is_shovel_file(reader):
+                        params = ShovelParameters.read_from(reader, ssh_agent)
+                        params.decrypt(reader, writer)
+                    else:
+                        shutil.copyfileobj(reader, writer)
             else:
-                shutil.copyfileobj(reader, tmp)
-            tmp.flush()
-        else:
-            log('new file, no decryption needed!')
-            time.sleep(0.700)
+                log('new file, no decryption needed!')
+                time.sleep(0.700)
 
-        if params is None:
-            params = ShovelParameters.random(ssh_agent, key, cipher)
+            if params is None:
+                params = ShovelParameters.random(ssh_agent, key, cipher)
 
-        editor = Editor.default()
-        editor.edit(tmp.name)
-        with open(tmp.name, 'rb') as reader, open(path, 'wb') as writer:
-            params.encrypt(reader, writer)
+            editor = Editor.default()
+            log('editing %s with %s' % (tmp, editor.binary))
+            editor.edit(tmp)
+            with open(tmp, 'rb') as reader, open(path, 'wb') as writer:
+                params.encrypt(reader, writer)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            shutil.rmtree(tmp_dir)
 
     @staticmethod
     def _parse_args(args):
