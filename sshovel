@@ -474,7 +474,12 @@ class ShovelHeader(object):
     VERSION = 5807
 
     @classmethod
-    def is_shovel_file(cls, reader):
+    def is_shovel_file(cls, path):
+        with io.open(path, mode='rb', buffering=1024) as reader:
+            return cls.is_shovel_stream(reader)
+
+    @classmethod
+    def is_shovel_stream(cls, reader):
         length = len(cls.MAGIC)
         block = reader.peek(length)
         actual = block[0:length]
@@ -538,9 +543,10 @@ class Editor(object):
     @staticmethod
     def _cksum(path):
         buf = hashlib.sha1()
-        with io.open(path, mode='rb') as reader:
-            block = reader.read(1 << 16)
-            buf.update(block)
+        if os.path.exists(path):
+            with io.open(path, mode='rb') as reader:
+                block = reader.read(1 << 16)
+                buf.update(block)
         return buf.hexdigest()
 
 
@@ -594,7 +600,7 @@ class Main(object):
         except IOError as ex:
             raise UserException(ex)
 
-        if ShovelHeader.is_shovel_file(reader):
+        if ShovelHeader.is_shovel_stream(reader):
             (ShovelParameters
              .read_from(reader, ssh_agent)
              .decrypt(reader, writer))
@@ -618,28 +624,38 @@ class Main(object):
     def _edit(path, ssh_agent, key, cipher):
         tmp_dir = tempfile.mkdtemp()
         tmp = os.path.join(tmp_dir, os.path.basename(path))
+        is_new = not os.path.exists(path)
+        is_plaintext = not (is_new or ShovelHeader.is_shovel_file(path))
         try:
             params = None
-            if os.path.exists(path):
-                with io.open(path, mode='rb', buffering=1024) as reader, \
-                        io.open(tmp, mode='wb') as writer:
-                    if ShovelHeader.is_shovel_file(reader):
-                        params = ShovelParameters.read_from(reader, ssh_agent)
-                        params.decrypt(reader, writer)
-                    else:
-                        shutil.copyfileobj(reader, writer)
-            else:
+            if is_new:
                 log('new file, no decryption needed!')
                 time.sleep(0.700)
+            else:
+                if is_plaintext:
+                    shutil.copyfile(path, tmp)
+                else:
+                    with open(path, 'rb') as reader, open(tmp, 'wb') as writer:
+                        params = ShovelParameters.read_from(reader, ssh_agent)
+                        params.decrypt(reader, writer)
 
             if params is None:
                 params = ShovelParameters.random(ssh_agent, key, cipher)
 
             editor = Editor.default()
             log('editing %s with %s' % (tmp, editor.binary))
-            editor.edit(tmp)
-            with open(tmp, 'rb') as reader, open(path, 'wb') as writer:
-                params.encrypt(reader, writer)
+            is_changed = editor.edit(tmp)
+            if is_new or is_plaintext or is_changed:
+                if is_new:
+                    log('new file, encrypting')
+                if is_plaintext:
+                    log('original file was plaintext, encrypting')
+                if is_changed:
+                    log('edits were madge, re-encrypting')
+                with open(tmp, 'rb') as reader, open(path, 'wb') as writer:
+                    params.encrypt(reader, writer)
+            else:
+                log('no edits, skipping encrypt')
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
@@ -768,8 +784,7 @@ class MainTest(unittest.TestCase):
         self.ssh_fixture = SSHTestFixture()
         os.environ['SSH_AUTH_SOCK'] = self.ssh_fixture.socket_path
         # $EDITOR
-        self.editor_tmp = self.fake_editor()
-        os.environ['EDITOR'] = self.editor_tmp.name
+        self.editor_tmp = None
         # Some test files
         self.tmps = [tempfile.mkstemp()[1] for _ in range(3)]
         with open(self.tmps[0], 'w') as writer:
@@ -783,6 +798,7 @@ class MainTest(unittest.TestCase):
         self.assert_file_contents(tmp2, self.message)
 
     def test_edit(self):
+        self.use_add_data_editor()
         tmp0, tmp1, _ = self.tmps
         # Edit in place
         Main(['--cipher', 'openssl', '--edit', tmp0])
@@ -791,27 +807,69 @@ class MainTest(unittest.TestCase):
         Main([tmp0, tmp1])
         self.assert_file_contents(tmp1, self.message + 'DATA')
 
+    def test_edit_plaintext_noop(self):
+        self.use_noop_editor()
+        tmp0 = self.tmps[0]
+        time0 = 1234  # 1970-01-01 01:20:34 +0100
+        os.utime(tmp0, (time0, time0))
+        Main(['--cipher', 'openssl', '--edit', tmp0])
+        time1 = os.stat(tmp0).st_mtime
+        self.assert_encrypted(tmp0)
+        self.assertNotEqual(time0, time1, 'mtime should have changed!')
+
+    def test_edit_existing_noop(self):
+        self.use_noop_editor()
+        tmp0, tmp1, _ = self.tmps
+        # Prepare an encrypted file
+        Main(['--cipher', 'openssl', tmp0, tmp1])
+        self.assert_encrypted(tmp1)
+        # Edit, but don't actually change anything
+        time0 = 1234  # 1970-01-01 01:20:34 +0100
+        os.utime(tmp1, (time0, time0))
+        Main(['--cipher', 'openssl', '--edit', tmp1])
+        time1 = os.stat(tmp1).st_mtime
+        self.assert_encrypted(tmp1)
+        self.assertEqual(time0, time1, "mtime should be unchanged!")
+
+    def test_edit_new_file(self):
+        self.use_add_data_editor()
+        tmp0, tmp1, _ = self.tmps
+        os.remove(tmp0)
+        Main(['--cipher', 'openssl', '--edit', tmp0])
+        self.assert_encrypted(tmp0)
+        Main([tmp0, tmp1])
+        self.assert_file_contents(tmp1, "DATA")
+
     def assert_file_contents(self, path, expected):
         with open(path, 'r') as reader:
             self.assertEqual(reader.read(), expected)
 
     def assert_encrypted(self, path):
-        with io.open(path, 'rb', buffering=1024) as reader:
-            self.assertTrue(ShovelHeader.is_shovel_file(reader))
+        self.assertTrue(ShovelHeader.is_shovel_file(path))
 
     def tearDown(self):
         self.ssh_fixture.stop()
         for path in self.tmps:
             os.unlink(path)
+        if self.editor_tmp is not None:
+            self.editor_tmp = None
+            del os.environ['EDITOR']
 
-    @staticmethod
-    def fake_editor():
-        script = "#!/bin/sh\nexec /bin/echo -n DATA >> $1\n"
+    def use_add_data_editor(self):
+        self.use_shell_script_editor("exec /bin/echo -n DATA >> $1")
+
+    def use_noop_editor(self):
+        self.use_shell_script_editor("exec touch $1")
+
+    def use_shell_script_editor(self, script):
         tmp = tempfile.NamedTemporaryFile()
+        tmp.write("#!/bin/sh\n")
         tmp.write(script)
+        tmp.write("\n")
         tmp.flush()
         os.chmod(tmp.name, 0700)
-        return tmp
+        self.editor_tmp = tmp
+        os.environ['EDITOR'] = tmp.name
 
 
 class BinaryWriterTest(unittest.TestCase):
