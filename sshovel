@@ -382,6 +382,7 @@ class ScryptCipher(Cipher):
 
     @staticmethod
     def scrypt(command, reader, writer, *passphrases):
+        log('passing data to scrypt')
         exp = Expect(command)
         for passphrase in passphrases:
             exp.expect('passphrase: ', 1)
