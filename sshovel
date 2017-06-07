@@ -521,6 +521,7 @@ class Editor(object):
         self.binary = binary
 
     def edit(self, path):
+        cksum_before = self._cksum(path)
         command = [self.binary, path]
         pid = os.fork()
         if pid == 0:
@@ -531,6 +532,16 @@ class Editor(object):
             raise UserException(
                 "error; editor %s exited with status %d" %
                 (self.binary, status))
+        cksum_after = self._cksum(path)
+        return cksum_after != cksum_before
+
+    @staticmethod
+    def _cksum(path):
+        buf = hashlib.sha1()
+        with io.open(path, mode='rb') as reader:
+            block = reader.read(1 << 16)
+            buf.update(block)
+        return buf.hexdigest()
 
 
 class Main(object):
