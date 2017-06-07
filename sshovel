@@ -517,11 +517,11 @@ class Editor(object):
         editor = os.environ.get('EDITOR', cls.DEFAULT)
         return cls(editor)
 
-    def __init__(self, editor):
-        self.editor = editor
+    def __init__(self, binary):
+        self.binary = binary
 
     def edit(self, path):
-        command = [self.editor, path]
+        command = [self.binary, path]
         pid = os.fork()
         if pid == 0:
             os.execvp(command[0], command)
@@ -530,7 +530,7 @@ class Editor(object):
         if status != 0:
             raise UserException(
                 "error; editor %s exited with status %d" %
-                (self.editor, status))
+                (self.binary, status))
 
 
 class Main(object):
